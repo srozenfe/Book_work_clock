@@ -39,7 +39,14 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q book_work_clock.py manual_time.py updater.py
       - name: Build self-contained Windows executable
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name BookWorkClock book_work_clock.py
+        run: python -m PyInstaller --noconfirm --clean --onedir --windowed --name BookWorkClock book_work_clock.py
+      - name: Check packaged Python runtime
+        shell: pwsh
+        run: |
+          if (!(Test-Path "dist/BookWorkClock/BookWorkClock.exe")) { throw "EXE missing" }
+          $dll = Get-ChildItem -Path "dist/BookWorkClock" -Filter "python312.dll" -Recurse
+          if (!$dll) { throw "Bundled python312.dll missing" }
+          Write-Host "Python DLL packaged in stable application directory: $($dll.FullName)"
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
       - name: Build Windows installer
@@ -55,7 +62,7 @@ jobs:
           name: BookWorkClock-Windows
           path: |
             dist/installer/BookWorkClock-Setup.exe
-            dist/BookWorkClock.exe
+            dist/BookWorkClock/**
           if-no-files-found: error
 
       - name: Publish installer automatically for a new version

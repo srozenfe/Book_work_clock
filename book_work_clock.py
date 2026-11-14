@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import winreg
 import sqlite3
 import sys
@@ -95,23 +96,72 @@ def idle_seconds() -> float:
     return ((current - info.dwTime) & 0xFFFFFFFF) / 1000.0
 
 
-def foreground_word_title() -> str | None:
-    """Return title only if the foreground process is Microsoft Word."""
+DOCUMENT_APPS = {
+    "winword.exe": "Word",
+    "acrord32.exe": "PDF",
+    "acrobat.exe": "PDF",
+    "foxitpdfreader.exe": "PDF",
+    "foxitreader.exe": "PDF",
+    "sumatrapdf.exe": "PDF",
+    "msedge.exe": "Browser",
+    "chrome.exe": "Browser",
+    "firefox.exe": "Browser",
+}
+
+
+def foreground_document():
+    """Inspect just the foreground app/window, never typed keys or document contents.
+
+    Return (process, title) even when unmatched so users can diagnose filename
+    or application-title differences. Browsers count only registered PDF names.
+    """
     if user32 is None:
-        return None
+        return None, ""
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
-        return None
+        return None, ""
     pid = ctypes.c_ulong()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     try:
-        if psutil.Process(pid.value).name().lower() != "winword.exe":
-            return None
+        process = psutil.Process(pid.value).name().casefold()
     except (psutil.NoSuchProcess, psutil.AccessDenied):
-        return None
+        return None, ""
     buf = ctypes.create_unicode_buffer(2048)
     user32.GetWindowTextW(hwnd, buf, len(buf))
-    return buf.value or None
+    return process, buf.value.strip()
+
+
+def title_matches_document(window_title, path, process):
+    """Accept Word title variants with/without extension and common suffixes.
+
+    For browser-based PDFs require .pdf in the selected title, to avoid tracking
+    unrelated tabs accidentally sharing a book name.
+    """
+    ext = Path(path).suffix.casefold()
+    app = DOCUMENT_APPS.get(process or "")
+    if ext in (".doc", ".docx", ".docm"):
+        if app != "Word":
+            return False
+    elif ext == ".pdf":
+        if app not in ("PDF", "Browser"):
+            return False
+    else:
+        return False
+    title = window_title.casefold().strip()
+    stem = Path(path).stem.casefold().strip()
+    name = Path(path).name.casefold().strip()
+    # Windows applications normally put the document name before ' - App'.
+    # Word can hide the extension, while Acrobat often includes '.pdf'.
+    candidates = (name, stem) if app != "Browser" else (name,)
+    for candidate in candidates:
+        if title == candidate:
+            return True
+        # Only match at the beginning and require a clear window-title boundary.
+        if title.startswith(candidate):
+            rest = title[len(candidate):]
+            if rest.startswith((" - ", " — ", " – ", " | ", " —", " (")):
+                return True
+    return False
 
 
 class Store:
@@ -253,7 +303,7 @@ class BookDialog(QDialog):
         path_row.addWidget(browse)
         form = QFormLayout()
         form.addRow("Book title:", self.title_input)
-        form.addRow("Word document:", path_row)
+        form.addRow("Word or PDF document:", path_row)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -265,7 +315,7 @@ class BookDialog(QDialog):
 
     def browse(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose book document", "", "Word files (*.docx *.doc *.docm)"
+            self, "Choose book document", "", "Documents (*.docx *.doc *.docm *.pdf)"
         )
         if path:
             self.path_input.setText(path)
@@ -293,7 +343,10 @@ class MainWindow(QMainWindow):
         self.last_idle_alert = False
         self.last_nonword_alert = False
         self.continue_outside_word = False
-        self.resume_guard = None  # input tick when user chose to pause
+        self.resume_guard = None  # last input when paused
+        self.pause_needs_leave = False
+        self.idle_prompt_suppressed = False
+        self.last_foreground_signature = None
         self.setWindowTitle(f"Book Work Clock v{APP_VERSION}")
         self.resize(1030, 720)
         self.setStyleSheet("""
@@ -323,8 +376,11 @@ class MainWindow(QMainWindow):
         heading = QLabel(f"Book Work Clock  •  Writing Dashboard  •  v{APP_VERSION}")
         heading.setStyleSheet("font-size: 26px; font-weight: bold; padding: 8px;")
         outer.addWidget(heading)
-        self.status = QLabel("Ready — open a registered Word document to start")
+        self.status = QLabel("Ready — open a registered Word or PDF document to start")
+        self.detection = QLabel("Detection: waiting for a document")
+        self.detection.setStyleSheet("color: #65758b; font-size: 11px;")
         outer.addWidget(self.status)
+        outer.addWidget(self.detection)
         self.clock = QLabel("00:00:00")
         self.clock.setStyleSheet("font-size: 40px; font-weight: bold; color: #2563c8; padding: 8px;")
         outer.addWidget(self.clock)
@@ -592,18 +648,12 @@ class MainWindow(QMainWindow):
             "Automatic tracking enabled" if enabled else "Manual mode — auto-start disabled"
         )
 
-    def find_matching_book(self, word_title):
-        if not word_title:
-            return None
-        title = word_title.casefold()
-        matches = []
-        for book_id, _, path in self.store.books():
-            stem = Path(path).stem.casefold()
-            name = Path(path).name.casefold()
-            # Word title usually begins with the document filename or stem.
-            if title == stem or title.startswith(stem + " -") or title.startswith(stem + " —") or title.startswith(name + " -") or title == name:
-                matches.append(book_id)
-        # Never guess when multiple registered documents have an ambiguous title.
+    def find_matching_book(self, process, title):
+        matches = [
+            book_id for book_id, _, path in self.store.books()
+            if title_matches_document(title, path, process)
+        ]
+        # Ambiguous titles never automatically charge the wrong book.
         return matches[0] if len(matches) == 1 else None
 
     def begin(self, book_id):
@@ -612,6 +662,8 @@ class MainWindow(QMainWindow):
         self.pause()
         self.current_book = book_id
         self.resume_guard = None
+        self.pause_needs_leave = False
+        self.idle_prompt_suppressed = False
         self.segment_id = self.store.start_segment(book_id)
         self.segment_started = time.monotonic()
         self.last_idle_alert = False
@@ -633,11 +685,15 @@ class MainWindow(QMainWindow):
     def user_pause(self):
         self.pause()
         self.resume_guard = last_input_tick()
+        # Don't instantly resume simply because clicking Pause returns focus to
+        # a document. Require a transition away and then back to that document.
+        self.pause_needs_leave = True
 
     def stop(self):
         self.pause()
         self.current_book = None
         self.resume_guard = last_input_tick()
+        self.pause_needs_leave = True
         self.status.setText("Stopped — automatic tracking remains available")
 
     def manual_start(self):
@@ -647,13 +703,18 @@ class MainWindow(QMainWindow):
             return
         self.auto_box.setChecked(True)
         self.resume_guard = None
+        self.pause_needs_leave = False
         self.begin(book_id)
 
     def interrupt(self, reason):
         # The alert itself steals focus; don't poll again until it is dismissed.
         if self.segment_id is None:
             return
-        dialog = QMessageBox(self)
+        dialog = QMessageBox(None)
+        dialog.setWindowFlags(
+            dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint
+        )
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         dialog.setWindowTitle("Book Work Clock — interruption detected")
         dialog.setText(reason)
         dialog.setInformativeText("Should the writing timer keep running?")
@@ -663,6 +724,9 @@ class MainWindow(QMainWindow):
         disable = dialog.addButton(
             "Pause + don't ask again", QMessageBox.ButtonRole.DestructiveRole
         )
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
         dialog.exec()
         chosen = dialog.clickedButton()
         if chosen == pause:
@@ -674,9 +738,11 @@ class MainWindow(QMainWindow):
             self.auto_box.setChecked(False)
         elif chosen == keep:
             self.continue_outside_word = True
+            self.idle_prompt_suppressed = True
         else:
             # Dismissing the dialog means no change to running time.
             self.continue_outside_word = True
+            self.idle_prompt_suppressed = True
 
     def tick(self):
         if self.segment_id is not None:
@@ -687,40 +753,57 @@ class MainWindow(QMainWindow):
         else:
             self.clock.setText("00:00:00")
 
-        # Opening the app to manage books must not itself trigger an interruption.
-        if user32.GetForegroundWindow() == int(self.winId()):
+        process, title = foreground_document()
+        if process == "bookworkclock.exe" or (
+            user32.GetForegroundWindow() == int(self.winId())
+        ):
+            self.detection.setText("Detection: Book Work Clock window")
             return
-        word_title = foreground_word_title()
-        # Ignore this application's own foreground window; it is used for controls.
-        word_book = self.find_matching_book(word_title)
+        book_id = self.find_matching_book(process, title)
         idle = idle_seconds() >= IDLE_SECONDS
+        if book_id is not None:
+            book_label = next(
+                (name for ident, name, _ in self.store.books() if ident == book_id),
+                "Document"
+            )
+            self.detection.setText(f"Detected: {book_label} ({DOCUMENT_APPS.get(process)})")
+        elif process in DOCUMENT_APPS:
+            self.detection.setText(
+                f"Not matched: {process} | {title[:100] or '(no title)'}"
+            )
+        else:
+            self.detection.setText("Detection: no registered document in front")
 
         if not idle:
             self.last_idle_alert = False
+            self.idle_prompt_suppressed = False
 
-        if word_book is not None:
+        # After Pause, auto-resume is allowed on a *return* to the document,
+        # not simply while the same window remains active.
+        if self.pause_needs_leave and book_id != self.current_book:
+            self.pause_needs_leave = False
+
+        if book_id is not None:
             self.last_nonword_alert = False
-            self.continue_outside_word = False
+            if self.current_book != book_id:
+                self.continue_outside_word = False
 
-        if self.auto_enabled and not idle and word_book is not None:
-            can_resume = (
-                self.resume_guard is None
-                or last_input_tick() != self.resume_guard
-            )
-            if can_resume and (word_book != self.current_book or self.segment_id is None):
-                self.begin(word_book)
+        if self.auto_enabled and not idle and book_id is not None:
+            if not self.pause_needs_leave:
+                if book_id != self.current_book or self.segment_id is None:
+                    self.begin(book_id)
 
         if self.segment_id is None:
             return
-        if idle and not self.last_idle_alert:
+        if idle and not self.last_idle_alert and not self.idle_prompt_suppressed:
             self.last_idle_alert = True
             self.interrupt("No keyboard or mouse activity for 15 seconds.")
         elif (
-            word_book is None and not idle
+            book_id is None and not idle
             and not self.last_nonword_alert and not self.continue_outside_word
         ):
             self.last_nonword_alert = True
-            self.interrupt("Microsoft Word is no longer the active application.")
+            self.interrupt("The tracked Word or PDF document is no longer in front.")
 
     def exit_app(self):
         self.pause()

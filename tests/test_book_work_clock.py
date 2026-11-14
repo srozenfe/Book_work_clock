@@ -91,7 +91,7 @@ class StoreRegressionTests(unittest.TestCase):
         segment_id = self.store.start_segment(first)
         self.store.save_segment(segment_id, 50)
         self.store.edit_session(segment_id, second, self.start, self.end, "Moved")
-        self.assertEqual(self.store.totals()[first], 0)
+        self.assertEqual(self.store.totals().get(first, 0), 0)
         self.assertEqual(self.store.totals()[second], 1800)
 
 

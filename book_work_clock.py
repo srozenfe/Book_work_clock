@@ -180,6 +180,23 @@ def title_matches_document(window_title, path, process):
     return False
 
 
+def resolve_book_override(matched_book, selected_book, origin_hwnd, hwnd, left_window):
+    """Honor the chosen book until the user switches windows.
+
+    Only the selected book accumulates time during this temporary override.
+    When a new registered document becomes foreground after leaving the
+    original window, normal automatic document detection resumes.
+    """
+    if selected_book is None:
+        return matched_book, None, False
+    left_window = left_window or hwnd != origin_hwnd
+    if left_window and matched_book is not None:
+        return matched_book, None, False
+    if matched_book is not None:
+        return selected_book, selected_book, left_window
+    return None, selected_book, left_window
+
+
 class Store:
     def __init__(self):
         APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -1164,14 +1181,12 @@ class MainWindow(QMainWindow):
         # A user-picked Keep target wins over the document that happened
         # to be in front when the interruption appeared. The override ends
         # only when the user switches windows and returns to a tracked file.
-        if self.book_override is not None:
-            if hwnd != self.override_origin_hwnd:
-                self.override_seen_other_window = True
-            if book_id is not None:
-                if self.override_seen_other_window:
-                    self.book_override = None
-                else:
-                    book_id = self.book_override
+        book_id, self.book_override, self.override_seen_other_window = (
+            resolve_book_override(
+                book_id, self.book_override, self.override_origin_hwnd,
+                hwnd, self.override_seen_other_window,
+            )
+        )
         idle = idle_seconds() >= IDLE_SECONDS
         if book_id is not None:
             book_label = next(

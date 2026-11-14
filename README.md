@@ -45,6 +45,50 @@ Auto-recorded entries are deliberately protected from manual deletion and edits
 in this first version. All time, including manual entries, is counted in book totals.
 Old databases are migrated automatically while retaining existing records.
 
+## Book payments and effective hourly earnings
+
+Select a book, click **Payment / earnings**, and enter the total payment
+received or agreed for that book plus its currency (ILS, USD, EUR, GBP).
+The dashboard shows the payment amount, tracked hours, and effective earnings
+per hour: **payment / all recorded hours**. Automatic and manual sessions
+both count. When the book has zero tracked hours, the hourly rate displays
+"N/A". These values remain in your local SQLite database.
+
+## Desktop launcher, single instance, and updates (v0.3)
+
+The installer now **always creates a desktop shortcut**, even if the app is
+configured to start automatically with Windows. Startup launches it hidden in
+the tray. Double-clicking the desktop shortcut opens the existing running
+dashboard (never a second timer) and checks for updates. If the app was not
+running, the shortcut launches it and then checks for updates.
+
+Updates come from the **latest published tagged GitHub Release**, not every
+source commit. For this PRIVATE repository, on the first update check the app
+asks for a **fine-grained GitHub personal access token** limited to the
+`srozenfe/Book_work_clock` repository with **Contents: read-only** permission.
+The token is stored in Windows Credential Manager, **not** in the local
+SQLite file, script, or the GitHub repository. You can revoke it from GitHub.
+If you decline token setup, the app remains fully usable, but can't check
+private releases.
+
+When a newer release contains `BookWorkClock-Setup.exe`, the app asks for
+confirmation, downloads the release asset, checks the SHA-256 digest published
+by GitHub, runs the installer, and relaunches itself. The installer preserves
+your local user data. Update checking on the desktop launcher is user-initiated;
+background startup does not check or download.
+
+### Publishing an update
+
+To make a new update installable, publish a version tag in the form `v0.3.1`
+(or higher) and keep the application and installer version numbers aligned.
+The Windows GitHub Actions workflow builds and publishes the installer as a
+GitHub Release when a `v*` tag is pushed.
+
+**Current note:** This version's updater requires an actual published
+release to exist. Until the first tagged release is published, the update
+check cannot find an installable version. GitHub CI builds and a Windows
+test are still required before relying on automatic update installation.
+
 ## Developer install on Windows 11
 
 1. Download/clone the repository and open PowerShell in its folder.
@@ -103,7 +147,7 @@ The output is in `dist\BookWorkClock.exe`.
 - Tested execution on Windows 11 is still needed; development was performed remotely without a Windows GUI.
 - Matching uses the Word window title and the registered document filename. Word title variations, similarly named documents, and some unusual Word installations may require improved matching through Word COM automation.
 - Tracking is **activity/foreground detection**, not proof of writing or actual document edits. Reading and thinking can also be counted at your choice.
-- A paused or stopped session is recorded as one or more time segments. There is not yet a separate pause-event log, manual time correction, or CSV/Excel export.
+- A paused or stopped session is recorded as one or more time segments. Manual entries are editable, but there is not yet a separate pause-event log or CSV/Excel export.
 - When the user chooses *Keep tracking* outside Word, time continues until the registered Word window returns or the timer is manually paused/stopped. Subsequent foreground switches while outside Word are not repeatedly prompted.
 - The desktop interface has been refreshed but does **not yet exactly reproduce the earlier design concept** (sidebar, large summary cards, charts). It needs further UI work and real-world testing for focus changes, sleep/wake, idle prompt timing, clock accuracy and window title variations.
 

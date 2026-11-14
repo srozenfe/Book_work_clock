@@ -267,15 +267,68 @@ class Store:
             "SELECT id,title,document_path FROM books WHERE archived=0 ORDER BY title"
         ).fetchall()
 
+    @staticmethod
+    def _path_key(path):
+        return os.path.normcase(os.path.normpath(path.strip())).casefold()
+
+    def _find_conflicts(self, title, paths, exclude_id=None):
+        """Return matching books, matching filenames before matching titles."""
+        new_paths = {self._path_key(path) for path in paths}
+        matches = []
+        for book_id, existing_title, archived in self.db.execute(
+            "SELECT id,title,archived FROM books ORDER BY id"
+        ).fetchall():
+            if book_id == exclude_id:
+                continue
+            old_paths = {
+                self._path_key(path) for path in self.document_paths(book_id)
+            }
+            same_file = bool(old_paths.intersection(new_paths))
+            same_title = existing_title.strip().casefold() == title.strip().casefold()
+            if same_file or same_title:
+                matches.append((book_id, bool(archived), same_file, same_title))
+        return sorted(matches, key=lambda m: (not m[2], m[0]))
+
     def add_book(self, title, paths):
+        """Restore an archived book when name or document matches, keeping history.
+
+        Returns (book_id, restored). Never duplicate an active book; never
+        silently merge ambiguous archived records into the wrong history.
+        """
+        conflicts = self._find_conflicts(title, paths)
+        active = [item for item in conflicts if not item[1]]
+        if active:
+            raise ValueError(
+                "This book or document already exists in the book list. "
+                "Select the existing book and use Edit to change its files."
+            )
+        archived = [item for item in conflicts if item[1]]
+        if len(archived) > 1:
+            raise ValueError(
+                "Multiple archived books match this name or document. "
+                "Please choose a distinct name or restore one archived record."
+            )
         with self.db:
+            if archived:
+                book_id = archived[0][0]
+                self.db.execute(
+                    "UPDATE books SET title=?, archived=0 WHERE id=?",
+                    (title, book_id),
+                )
+                self.set_document_paths(book_id, paths)
+                return book_id, True
             cur = self.db.execute(
                 "INSERT INTO books(title,document_path) VALUES (?,?)",
-                (title, paths[0])
+                (title, paths[0]),
             )
             self.set_document_paths(cur.lastrowid, paths)
+            return cur.lastrowid, False
 
     def edit_book(self, book_id, title, paths):
+        if self._find_conflicts(title, paths, exclude_id=book_id):
+            raise ValueError(
+                "Another book already has this name or one of these documents."
+            )
         with self.db:
             self.db.execute("UPDATE books SET title=? WHERE id=?", (title, book_id))
             self.set_document_paths(book_id, paths)
@@ -312,34 +365,53 @@ class Store:
         )
         self.db.commit()
 
-    def get_manual(self, session_id):
+    def get_session(self, session_id):
         return self.db.execute(
-            "SELECT id,book_id,started_at,ended_at,note FROM sessions WHERE id=? AND is_manual=1",
-            (session_id,)
+            """SELECT id,book_id,started_at,ended_at,note,is_manual
+               FROM sessions WHERE id=?""", (session_id,)
         ).fetchone()
 
-    def edit_manual(self, session_id, book_id, start, end, note):
+    def edit_session(self, session_id, book_id, start, end, note):
+        """Edit automatic or manual time while preserving capture provenance."""
         duration = (end - start).total_seconds()
         if duration <= 0:
             raise ValueError("End must be after start")
-        self.db.execute(
-            """UPDATE sessions SET book_id=?, started_at=?, ended_at=?, seconds=?, note=?
-               WHERE id=? AND is_manual=1""",
-            (book_id, start.isoformat(timespec="seconds"),
-             end.isoformat(timespec="seconds"), duration, note, session_id)
-        )
-        self.db.commit()
+        with self.db:
+            result = self.db.execute(
+                """UPDATE sessions
+                   SET book_id=?,started_at=?,ended_at=?,seconds=?,note=?,
+                       edited_at=?
+                   WHERE id=?""",
+                (book_id, start.isoformat(timespec="seconds"),
+                 end.isoformat(timespec="seconds"), duration, note,
+                 timestamp(), session_id),
+            )
+        if result.rowcount == 0:
+            raise ValueError("The selected time entry no longer exists.")
 
-    def remove_manual(self, session_id):
-        self.db.execute("DELETE FROM sessions WHERE id=? AND is_manual=1", (session_id,))
-        self.db.commit()
+    def remove_session(self, session_id):
+        """Delete any session type. Confirmation occurs in the UI."""
+        with self.db:
+            result = self.db.execute(
+                "DELETE FROM sessions WHERE id=?", (session_id,)
+            )
+        return result.rowcount > 0
 
-    def history(self):
-        return self.db.execute("""
-            SELECT s.id,b.title,s.started_at,s.ended_at,s.seconds,s.is_manual,s.note
+    def history(self, book_id=None):
+        """Show one selected book's history, or all books when none selected."""
+        select = """
+            SELECT s.id,b.title,s.started_at,s.ended_at,s.seconds,
+                   s.is_manual,s.note,s.edited_at
             FROM sessions s JOIN books b ON b.id=s.book_id
-            ORDER BY s.id DESC LIMIT 300
-        """).fetchall()
+        """
+        if book_id is not None:
+            return self.db.execute(
+                select + " WHERE s.book_id=? ORDER BY s.started_at DESC,s.id DESC",
+                (book_id,),
+            ).fetchall()
+        return self.db.execute(
+            select + " ORDER BY s.started_at DESC,s.id DESC"
+        ).fetchall()
 
     def totals(self):
         return dict(self.db.execute(
@@ -452,7 +524,7 @@ class MainWindow(QMainWindow):
         self.idle_prompt_suppressed = False
         self.last_foreground_signature = None
         self.setWindowTitle(f"Book Work Clock v{APP_VERSION}")
-        self.resize(1030, 720)
+        self.resize(1030, 800)
         self.setStyleSheet("""
             QMainWindow, QWidget { background: #f4f7fb; color: #1d2d45; }
             QLabel { font-size: 13px; }
@@ -530,23 +602,26 @@ class MainWindow(QMainWindow):
         )
         outer.addWidget(self.earnings_label)
         self.books_list.currentItemChanged.connect(
-            lambda current, previous: self.update_earnings()
+            lambda current, previous: self.refresh_history()
         )
-        outer.addWidget(QLabel("Recent tracked periods:"))
+        self.history_heading = QLabel("Work history — selected book")
+        outer.addWidget(self.history_heading)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
             ["Book", "Start", "End", "Duration", "Type", "Notes"]
         )
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.verticalHeader().setDefaultSectionSize(32)
+        self.table.setMinimumHeight(225)  # header plus at least 5 session rows
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         outer.addWidget(self.table)
         manual_row = QHBoxLayout()
         for label, fn in (
             ("+ Add manual time", self.add_manual_entry),
-            ("Edit manual time", self.edit_manual_entry),
-            ("Remove manual time", self.remove_manual_entry),
+            ("Edit selected time", self.edit_time_entry),
+            ("Delete selected time", self.remove_time_entry),
         ):
             button = QPushButton(label)
             button.clicked.connect(fn)
@@ -578,20 +653,27 @@ class MainWindow(QMainWindow):
         item = self.books_list.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else None
 
-    def refresh_books(self):
-        selected = self.selected_book()
-        self.books_list.clear()
-        from PySide6.QtWidgets import QListWidgetItem
-        totals = self.store.totals()
-        for book_id, title, path in self.store.books():
-            item = QListWidgetItem(
-                f"{title}    —    {format_duration(totals.get(book_id, 0))}"
-            )
-            item.setData(Qt.ItemDataRole.UserRole, book_id)
-            item.setToolTip("\\n".join(self.store.document_paths(book_id)))
-            self.books_list.addItem(item)
-            if book_id == selected:
-                self.books_list.setCurrentItem(item)
+    def refresh_books(self, select_book_id=None):
+        """Keep selection stable while rebuilding book totals and labels."""
+        selected = select_book_id if select_book_id is not None else self.selected_book()
+        self.books_list.blockSignals(True)
+        try:
+            self.books_list.clear()
+            from PySide6.QtWidgets import QListWidgetItem
+            totals = self.store.totals()
+            for book_id, title, path in self.store.books():
+                item = QListWidgetItem(
+                    f"{title}    —    {format_duration(totals.get(book_id, 0))}"
+                )
+                item.setData(Qt.ItemDataRole.UserRole, book_id)
+                item.setToolTip("\\n".join(self.store.document_paths(book_id)))
+                self.books_list.addItem(item)
+                if book_id == selected:
+                    self.books_list.setCurrentItem(item)
+            if self.books_list.currentRow() < 0 and self.books_list.count() > 0:
+                self.books_list.setCurrentRow(0)
+        finally:
+            self.books_list.blockSignals(False)
 
     def update_earnings(self):
         book_id = self.selected_book()
@@ -650,18 +732,32 @@ class MainWindow(QMainWindow):
             self.exit_app()
 
     def refresh_history(self):
-        rows = self.store.history()
+        selected_book = self.selected_book()
+        rows = self.store.history(selected_book)
+        book_title = next(
+            (title for book_id, title, _ in self.store.books()
+             if book_id == selected_book), "All books"
+        )
+        self.history_heading.setText(
+            f"Work history — {book_title} ({len(rows)} entries)"
+        )
+        selected_session = self.selected_session()
         self.table.setRowCount(len(rows))
-        for i, (session_id, title, start, end, seconds, manual, note) in enumerate(rows):
+        for i, (session_id, title, start, end, seconds, manual, note, edited) in enumerate(rows):
+            kind = "Manual" if manual else "Automatic"
+            if edited:
+                kind += " (edited)"
             values = (
                 title, start.replace("T", " ")[:19], end.replace("T", " ")[:19],
-                format_duration(seconds), "Manual" if manual else "Automatic", note
+                format_duration(seconds), kind, note
             )
             for j, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 if j == 0:
                     item.setData(Qt.ItemDataRole.UserRole, session_id)
                 self.table.setItem(i, j, item)
+            if selected_session == session_id:
+                self.table.selectRow(i)
         self.refresh_books()
         self.update_earnings()
 
@@ -678,29 +774,43 @@ class MainWindow(QMainWindow):
             self.store.add_manual(*dialog.values())
             self.refresh_history()
 
-    def edit_manual_entry(self):
+    def edit_time_entry(self):
         session_id = self.selected_session()
-        record = self.store.get_manual(session_id) if session_id is not None else None
+        record = self.store.get_session(session_id) if session_id is not None else None
         if record is None:
-            QMessageBox.information(self, "Select a manual entry",
-                                    "Only manual time entries can be edited here.")
+            QMessageBox.information(
+                self, "Select an entry", "Select a history row to edit."
+            )
             return
-        dialog = ManualSessionDialog(self.store.books(), self, record)
+        if self.segment_id == session_id:
+            self.user_pause()  # finalizes elapsed time before making corrections
+            record = self.store.get_session(session_id)
+        origin = "Manual" if record[5] else "Automatic"
+        dialog = ManualSessionDialog(
+            self.store.books(), self, record[:5], source=origin
+        )
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.store.edit_manual(session_id, *dialog.values())
+            self.store.edit_session(session_id, *dialog.values())
             self.refresh_history()
 
-    def remove_manual_entry(self):
+    def remove_time_entry(self):
         session_id = self.selected_session()
-        record = self.store.get_manual(session_id) if session_id is not None else None
+        record = self.store.get_session(session_id) if session_id is not None else None
         if record is None:
-            QMessageBox.information(self, "Select a manual entry",
-                                    "Only manual time entries can be removed here.")
+            QMessageBox.information(
+                self, "Select an entry", "Select a history row to delete."
+            )
             return
-        if QMessageBox.question(
-            self, "Remove manual time", "Delete the selected manual entry?"
-        ) == QMessageBox.StandardButton.Yes:
-            self.store.remove_manual(session_id)
+        origin = "manual" if record[5] else "automatic"
+        answer = QMessageBox.question(
+            self, "Delete time entry",
+            f"Delete this {origin} time entry permanently?\\n"
+            "This will also update the book total and hourly earnings."
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            if self.segment_id == session_id:
+                self.user_pause()
+            self.store.remove_session(session_id)
             self.refresh_history()
 
     def set_startup(self, enabled):
@@ -714,9 +824,21 @@ class MainWindow(QMainWindow):
 
     def add_book(self):
         dialog = BookDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.store.add_book(*dialog.values())
-            self.refresh_books()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            book_id, restored = self.store.add_book(*dialog.values())
+        except (ValueError, sqlite3.IntegrityError) as exc:
+            QMessageBox.warning(self, "Book could not be added", str(exc))
+            return
+        self.refresh_books(select_book_id=book_id)
+        self.refresh_history()
+        if restored:
+            QMessageBox.information(
+                self, "Book restored",
+                "This book was previously removed from the list. It has been "
+                "restored with its original time history and payment details."
+            )
 
     def edit_book(self):
         book_id = self.selected_book()
@@ -726,22 +848,29 @@ class MainWindow(QMainWindow):
         if not book:
             return
         dialog = BookDialog(self, book[1], self.store.document_paths(book_id))
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
             self.store.edit_book(book_id, *dialog.values())
-            self.refresh_books()
+        except (ValueError, sqlite3.IntegrityError) as exc:
+            QMessageBox.warning(self, "Book could not be changed", str(exc))
+            return
+        self.refresh_books(select_book_id=book_id)
+        self.refresh_history()
 
     def remove_book(self):
         book_id = self.selected_book()
         if book_id is None:
             return
         reply = QMessageBox.question(
-            self, "Remove book", "Archive this book? Its time history will be preserved."
+            self, "Remove book", "Hide this book from the list? Its time history will be preserved."
         )
         if reply == QMessageBox.StandardButton.Yes:
             if self.current_book == book_id:
-                self.pause()
+                self.user_pause()
                 self.current_book = None
             self.store.archive_book(book_id)
+            self.refresh_books()
             self.refresh_history()
 
     def set_auto(self, enabled):

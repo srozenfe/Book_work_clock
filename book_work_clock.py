@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import os
 import winreg
 import sqlite3
@@ -58,6 +59,19 @@ def configure_startup(enabled):
 
 
 user32 = ctypes.windll.user32 if sys.platform == "win32" else None
+if user32 is not None:
+    # ctypes defaults to a signed 32-bit return value; HWND is pointer-sized.
+    # Without these signatures, a 64-bit foreground HWND may be truncated.
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [
+        wintypes.HWND, ctypes.POINTER(wintypes.DWORD)
+    ]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.GetWindowTextW.argtypes = [
+        wintypes.HWND, wintypes.LPWSTR, ctypes.c_int
+    ]
+    user32.GetWindowTextW.restype = ctypes.c_int
+
 
 
 def timestamp() -> str:

@@ -14,6 +14,32 @@ A small, privacy-friendly Windows 11 desktop application that tracks time spent 
 - Keep historical time when a book is removed (archived), and show recent time entries.
 - Run in the Windows notification area when the main window is closed.
 
+## Book restoration and editable history (v0.3.5)
+
+**All captured time entries are editable**, including those originally recorded
+automatically. Select a history row and use **Edit selected time** to change the
+book, start/end dates and times, or note. **Delete selected time** removes either
+automatic or manual records after confirmation. An automatic record retains its
+original type after editing and is labeled **Automatic (edited)**. Active sessions
+are paused before they can be corrected or deleted. Corrections and deletions
+immediately update per-book totals and effective hourly earnings.
+
+**Remove book** hides it from the active list, but keeps its sessions and
+payment values. Adding a book with the **same title or an associated document**
+restores the archived record and all its original history. Attempting to create
+a second active book with an existing title/document shows a clear message to
+edit the existing book instead. Ambiguous matches between multiple archived
+books require disambiguation, rather than silently mixing their time histories.
+
+The **history table follows the selected book**, updating when the book
+selection changes. The full matching history (not just the most recent 300
+entries) is available, with a minimum display height of five visible rows.
+With no active book selected, history may show entries from all books.
+
+This migration adds an `edited_at` field to existing session rows without
+erasing old entries. Before making extensive historical corrections, back up
+`%LOCALAPPDATA%\\BookWorkClock\\work_clock.sqlite3` while the app is closed.
+
 ## Word and PDF for one book (v0.3.4)
 
 A book can now be associated with a **Word document, a PDF document, or
@@ -79,8 +105,8 @@ Only install binaries from your own trusted GitHub Actions run.
 Below the session history, use **+ Add manual time** to select a book,
 set start/end date-times, and optionally enter a note. Select a **Manual** entry
 in the history and click **Edit manual time** or **Remove manual time**.
-Auto-recorded entries are deliberately protected from manual deletion and edits
-in this first version. All time, including manual entries, is counted in book totals.
+Both automatic and manually recorded entries can be edited or deleted in v0.3.5.
+All time, including manual entries, is counted in book totals.
 Old databases are migrated automatically while retaining existing records.
 
 ## Book payments and effective hourly earnings
@@ -196,7 +222,7 @@ The output is in `dist\BookWorkClock.exe`.
 - Tested execution on Windows 11 is still needed; development was performed remotely without a Windows GUI.
 - Matching uses the foreground window title, process name, and registered document filename (with or without Word extension). Different application title formats may require enhancements. For PDFs opened in a browser, the PDF filename including `.pdf` must appear at the beginning of the tab/window title; an unrelated website is not tracked.
 - Tracking is **activity/foreground detection**, not proof of writing or actual document edits. Reading and thinking can also be counted at your choice.
-- A paused or stopped session is recorded as one or more time segments. Manual entries are editable, but there is not yet a separate pause-event log or CSV/Excel export.
+- A paused or stopped session is recorded as one or more time segments. Both automatic and manual entries are editable, but there is not yet a separate pause-event log or CSV/Excel export.
 - When the user chooses *Keep tracking* outside Word, time continues until the registered Word window returns or the timer is manually paused/stopped. Subsequent foreground switches while outside Word are not repeatedly prompted.
 - The desktop interface has been refreshed but does **not yet exactly reproduce the earlier design concept** (sidebar, large summary cards, charts). It needs further UI work and real-world testing for focus changes, sleep/wake, idle prompt timing, clock accuracy and window title variations.
 

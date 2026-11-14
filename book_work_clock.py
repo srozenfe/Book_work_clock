@@ -1177,6 +1177,7 @@ class MainWindow(QMainWindow):
             self.pause_needs_leave = False
             return
         book_id = self.find_matching_book(process, title)
+        detected_book_id = book_id
         hwnd = int(user32.GetForegroundWindow()) if user32 else None
         # A user-picked Keep target wins over the document that happened
         # to be in front when the interruption appeared. The override ends
@@ -1193,7 +1194,15 @@ class MainWindow(QMainWindow):
                 (name for ident, name, _ in self.store.books() if ident == book_id),
                 "Document"
             )
-            self.detection.setText(f"Detected: {book_label} ({DOCUMENT_APPS.get(process)})")
+            if self.book_override is not None and book_id != detected_book_id:
+                self.detection.setText(
+                    f"Selected to keep tracking: {book_label} "
+                    f"(foreground belongs to a different book)"
+                )
+            else:
+                self.detection.setText(
+                    f"Detected: {book_label} ({DOCUMENT_APPS.get(process)})"
+                )
         elif process in DOCUMENT_APPS:
             self.detection.setText(
                 f"Not matched: {process} | {title[:100] or '(no title)'}"

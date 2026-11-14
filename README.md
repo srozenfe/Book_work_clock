@@ -14,6 +14,30 @@ A small, privacy-friendly Windows 11 desktop application that tracks time spent 
 - Keep historical time when a book is removed (archived), and show recent time entries.
 - Run in the Windows notification area when the main window is closed.
 
+## Active and archived books; explicit keep-tracking choice (v0.3.6)
+
+The book list now has **Active** and **Archive** tabs. Use
+**Send to archive** to hide an active book without deleting its history or
+payment settings. Select an archived book and choose **Return selected book to
+Active** to restore the exact record and its previous sessions. Archived books
+are excluded from automatic detection and from the interruption dialog.
+
+When interrupted, the on-top dialog displays a **single-choice radio button
+for every active book**, with the currently tracked book preselected. Choose
+a book and click **Keep tracking selected book** to direct the running timer
+to that book. The timer saves the previous book's captured period before
+switching, ensuring that time is not counted twice. Only one book can
+accumulate time at once. **Pause**, **Stop** and **Pause + don't ask again**
+remain available.
+
+The chosen book is respected while the original foreground window remains
+active. Normal automatic document matching resumes after you switch windows
+and return to an identifiable Word/PDF document. Closing the popup without
+selecting an action pauses the timer rather than silently billing more time.
+
+The migration also prevents an old Word path from being reintroduced into a
+book after the user removes that path while a PDF remains attached.
+
 ## Book restoration and editable history (v0.3.5)
 
 **All captured time entries are editable**, including those originally recorded

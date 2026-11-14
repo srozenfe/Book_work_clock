@@ -16,7 +16,7 @@ import requests
 from packaging.version import Version, InvalidVersion
 from PySide6.QtWidgets import QMessageBox
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 REPOSITORY = "srozenfe/Book_work_clock"
 API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 def github_headers(binary=False):

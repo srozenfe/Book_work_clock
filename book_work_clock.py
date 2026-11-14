@@ -116,6 +116,8 @@ DOCUMENT_APPS = {
     "foxitpdfreader.exe": "PDF",
     "foxitreader.exe": "PDF",
     "sumatrapdf.exe": "PDF",
+    "pdfxedit.exe": "PDF",
+    "pdfxcview.exe": "PDF",
     "msedge.exe": "Browser",
     "chrome.exe": "Browser",
     "firefox.exe": "Browser",

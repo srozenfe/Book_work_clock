@@ -110,7 +110,8 @@ class StoreRegressionTests(unittest.TestCase):
         other_id, _ = self.store.add_book(
             "Second", [r"C:\\Books\\Other.docx"]
         )
-        self.store.edit_book(other_id, "Second", [r"C:\\Books\\Shared.docx"])
+        with self.store.db:
+            self.store.set_document_paths(other_id, [r"C:\\Books\\Shared.docx"])
         with self.assertRaisesRegex(ValueError, "belongs to an active book"):
             self.store.restore_book(book_id)
         self.assertEqual([b[0] for b in self.store.archived_books()], [book_id])

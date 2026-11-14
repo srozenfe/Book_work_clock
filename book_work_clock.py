@@ -10,6 +10,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from updater import APP_VERSION, check_for_updates
+
 import psutil
 from PySide6.QtCore import Qt, QTimer
 from manual_time import ManualSessionDialog, ensure_manual_schema
@@ -131,6 +134,25 @@ class Store:
             CREATE INDEX IF NOT EXISTS idx_sessions_book ON sessions(book_id);
         """)
         ensure_manual_schema(self.db)
+        self.ensure_payment_schema()
+        self.db.commit()
+
+    def ensure_payment_schema(self):
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(books)")}
+        if "payment" not in columns:
+            self.db.execute("ALTER TABLE books ADD COLUMN payment REAL NOT NULL DEFAULT 0")
+        if "currency" not in columns:
+            self.db.execute("ALTER TABLE books ADD COLUMN currency TEXT NOT NULL DEFAULT 'ILS'")
+        self.db.commit()
+
+    def book_payment(self, book_id):
+        return self.db.execute(
+            "SELECT payment,currency FROM books WHERE id=?", (book_id,)
+        ).fetchone()
+
+    def update_payment(self, book_id, payment, currency):
+        self.db.execute("UPDATE books SET payment=?,currency=? WHERE id=?",
+                        (payment, currency, book_id))
         self.db.commit()
 
     def books(self):
@@ -272,7 +294,7 @@ class MainWindow(QMainWindow):
         self.last_nonword_alert = False
         self.continue_outside_word = False
         self.resume_guard = None  # input tick when user chose to pause
-        self.setWindowTitle("Book Work Clock")
+        self.setWindowTitle(f"Book Work Clock v{APP_VERSION}")
         self.resize(1030, 720)
         self.setStyleSheet("""
             QMainWindow, QWidget { background: #f4f7fb; color: #1d2d45; }
@@ -298,7 +320,7 @@ class MainWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        heading = QLabel("Book Work Clock  •  Writing Dashboard")
+        heading = QLabel(f"Book Work Clock  •  Writing Dashboard  •  v{APP_VERSION}")
         heading.setStyleSheet("font-size: 26px; font-weight: bold; padding: 8px;")
         outer.addWidget(heading)
         self.status = QLabel("Ready — open a registered Word document to start")
@@ -324,6 +346,9 @@ class MainWindow(QMainWindow):
             controls.addWidget(widget)
         outer.addLayout(controls)
         outer.addWidget(self.startup_box)
+        self.update_btn = QPushButton("Check GitHub for updates")
+        self.update_btn.clicked.connect(self.check_updates)
+        outer.addWidget(self.update_btn)
 
         outer.addWidget(QLabel("Books (select a book to start manually):"))
         self.books_list = QListWidget()
@@ -333,11 +358,20 @@ class MainWindow(QMainWindow):
             ("Add book", self.add_book),
             ("Edit", self.edit_book),
             ("Remove", self.remove_book),
+            ("Payment / earnings", self.edit_payment),
         ):
             button = QPushButton(name)
             button.clicked.connect(handler)
             book_buttons.addWidget(button)
         outer.addLayout(book_buttons)
+        self.earnings_label = QLabel("Select a book to see earnings")
+        self.earnings_label.setStyleSheet(
+            "font-size: 16px; font-weight: bold; padding: 10px; color: #1762c0;"
+        )
+        outer.addWidget(self.earnings_label)
+        self.books_list.currentItemChanged.connect(
+            lambda current, previous: self.update_earnings()
+        )
         outer.addWidget(QLabel("Recent tracked periods:"))
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
@@ -399,6 +433,62 @@ class MainWindow(QMainWindow):
             if book_id == selected:
                 self.books_list.setCurrentItem(item)
 
+    def update_earnings(self):
+        book_id = self.selected_book()
+        if book_id is None:
+            self.earnings_label.setText("Select a book to see earnings")
+            return
+        payment, currency = self.store.book_payment(book_id)
+        total_seconds = self.store.totals().get(book_id, 0)
+        hours = total_seconds / 3600
+        symbol = {"ILS": "₪", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, currency)
+        hourly = payment / hours if hours > 0 else None
+        self.earnings_label.setText(
+            f"Payment: {symbol}{payment:,.2f}   |   "
+            f"Tracked: {hours:.2f} hours   |   "
+            f"Effective hourly earnings: "
+            + (f"{symbol}{hourly:,.2f}/hour" if hourly is not None else "N/A (no work time yet)")
+        )
+
+    def edit_payment(self):
+        book_id = self.selected_book()
+        if book_id is None:
+            QMessageBox.information(self, "Select a book", "Select a book first.")
+            return
+        payment, currency = self.store.book_payment(book_id)
+        from PySide6.QtWidgets import QDoubleSpinBox, QComboBox
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Book payment")
+        form = QFormLayout(dialog)
+        amount = QDoubleSpinBox()
+        amount.setDecimals(2)
+        amount.setRange(0, 999999999)
+        amount.setValue(payment)
+        money = QComboBox()
+        for item in ("ILS", "USD", "EUR", "GBP"):
+            money.addItem(item)
+        money.setCurrentText(currency)
+        form.addRow("Total payment for this book:", amount)
+        form.addRow("Currency:", money)
+        form.addRow(QLabel(
+            "Effective hourly earnings = total payment / all tracked hours.\n"
+            "Both automatic and manual work entries are included."
+        ))
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save |
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.store.update_payment(book_id, amount.value(), money.currentText())
+            self.update_earnings()
+
+    def check_updates(self):
+        if check_for_updates(self):
+            self.exit_app()
+
     def refresh_history(self):
         rows = self.store.history()
         self.table.setRowCount(len(rows))
@@ -413,6 +503,7 @@ class MainWindow(QMainWindow):
                     item.setData(Qt.ItemDataRole.UserRole, session_id)
                 self.table.setItem(i, j, item)
         self.refresh_books()
+        self.update_earnings()
 
     def selected_session(self):
         row = self.table.currentRow()
@@ -649,9 +740,38 @@ def main():
         raise SystemExit("Book Work Clock requires Windows 11.")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    # Only one process may track work. A desktop-launch request is delivered
+    # to the existing background process rather than starting another timer.
+    server_name = "BookWorkClock-srozenfe-single-instance"
+    client = QLocalSocket()
+    client.connectToServer(server_name)
+    if client.waitForConnected(450):
+        if "--background" not in sys.argv:
+            client.write(b"show-and-update")
+            client.flush()
+            client.waitForBytesWritten(500)
+        client.disconnectFromServer()
+        return
+    QLocalServer.removeServer(server_name)
+    server = QLocalServer()
+    if not server.listen(server_name):
+        raise SystemExit("Book Work Clock is already running or unavailable.")
     window = MainWindow()
+    def handle_connection():
+        while server.hasPendingConnections():
+            incoming = server.nextPendingConnection()
+            incoming.waitForReadyRead(200)
+            command = bytes(incoming.readAll()).decode("utf-8", "replace")
+            incoming.disconnectFromServer()
+            if command == "show-and-update":
+                window.showNormal()
+                window.raise_()
+                window.activateWindow()
+                QTimer.singleShot(150, window.check_updates)
+    server.newConnection.connect(handle_connection)
     if "--background" not in sys.argv or not QSystemTrayIcon.isSystemTrayAvailable():
         window.show()
+        QTimer.singleShot(300, window.check_updates)
     sys.exit(app.exec())
 
 

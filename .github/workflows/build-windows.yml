@@ -38,6 +38,8 @@ jobs:
           python -m pip install -r requirements.txt pyinstaller
       - name: Compile Python sources
         run: python -m compileall -q book_work_clock.py manual_time.py updater.py
+      - name: Regression tests for time edits and book restoration
+        run: python -m unittest discover -s tests -p test_book_work_clock.py -v
       - name: Build self-contained Windows executable
         run: python -m PyInstaller --noconfirm --clean --onedir --windowed --name BookWorkClock book_work_clock.py
       - name: Check packaged Python runtime

@@ -14,6 +14,20 @@ A small, privacy-friendly Windows 11 desktop application that tracks time spent 
 - Keep historical time when a book is removed (archived), and show recent time entries.
 - Run in the Windows notification area when the main window is closed.
 
+## Word and PDF for one book (v0.3.4)
+
+A book can now be associated with a **Word document, a PDF document, or
+both**. In **Add book** or **Edit**, choose files independently in the
+**Word document** and **PDF document** fields. At least one is required.
+When either registered file is active, the timer counts toward the **same
+book**, including in its work history and effective hourly earnings.
+
+Existing single-document books are migrated to a separate `book_documents`
+table automatically, without discarding recorded sessions or payment data.
+Removing a file association does **not** delete work history. Detection is
+still based on foreground application/window title; it does not read
+document contents.
+
 ## Windows runtime packaging repair (v0.3.3)
 
 v0.3.2 and older used a self-extracting `--onefile` executable. A Windows

@@ -1,8 +1,7 @@
-"""Private GitHub Releases updater for Book Work Clock.
+"""Public GitHub Releases updater for Book Work Clock.
 
-The user's read-only GitHub token is stored in Windows Credential Manager via
-keyring, never in the SQLite database or source tree. Only a published GitHub
-release with a SHA-256 digest is accepted as an update.
+Only published releases are considered. Installer SHA-256 must match the
+digest provided by GitHub, and no GitHub credentials are requested or stored.
 """
 from __future__ import annotations
 
@@ -12,63 +11,29 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
-import keyring
 import requests
 from packaging.version import Version, InvalidVersion
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QMessageBox
+from PySide6.QtWidgets import QMessageBox
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 REPOSITORY = "srozenfe/Book_work_clock"
 API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
-CREDENTIAL_SERVICE = "BookWorkClock-GitHub-Readonly"
-CREDENTIAL_ACCOUNT = REPOSITORY
-
-
-class CredentialDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Connect private GitHub repository")
-        self.input = QLineEdit()
-        self.input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.input.setPlaceholderText("Fine-grained GitHub read-only token")
-        form = QFormLayout(self)
-        form.addRow("GitHub token:", self.input)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save |
-            QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
-
-
-def get_token():
-    return keyring.get_password(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT)
-
-
-def save_token(token):
-    keyring.set_password(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT, token.strip())
-
-
-def github_headers(token, binary=False):
-    headers = {
-        "Authorization": f"Bearer {token}",
+def github_headers(binary=False):
+    return {
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": f"BookWorkClock/{APP_VERSION}",
         "Accept": "application/octet-stream" if binary
                   else "application/vnd.github+json",
     }
-    return headers
 
 
-def latest_release(token):
-    response = requests.get(API_URL, headers=github_headers(token), timeout=15)
+def latest_release():
+    response = requests.get(API_URL, headers=github_headers(), timeout=15)
     if response.status_code == 404:
         raise RuntimeError(
-            "No published release found, or your token cannot read this "
-            "private repository. Publish a versioned release to enable updates."
+            "No public release found. The repository must be public and a "
+            "versioned GitHub Release must be published."
         )
     response.raise_for_status()
     release = response.json()
@@ -91,7 +56,7 @@ def latest_release(token):
     return release, asset, digest.split(":", 1)[1].lower()
 
 
-def download_installer(token, asset, expected_digest):
+def download_installer(asset, expected_digest):
     # Never download from a user-supplied URL: only the GitHub release asset API.
     url = asset.get("url", "")
     expected_prefix = f"https://api.github.com/repos/{REPOSITORY}/releases/assets/"
@@ -104,7 +69,7 @@ def download_installer(token, asset, expected_digest):
     digest = hashlib.sha256()
     try:
         with requests.get(
-            url, headers=github_headers(token, binary=True),
+            url, headers=github_headers(binary=True),
             stream=True, timeout=(15, 90)
         ) as response:
             response.raise_for_status()
@@ -156,20 +121,7 @@ def check_for_updates(parent):
         )
         return False
     try:
-        token = get_token()
-        if not token:
-            if QMessageBox.question(
-                parent, "Private GitHub access",
-                "This repository is private. To check for updates, enter a fine-grained "
-                "read-only GitHub token once. Open the token entry window?"
-            ) != QMessageBox.StandardButton.Yes:
-                return False
-            dialog = CredentialDialog(parent)
-            if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.input.text().strip():
-                return False
-            token = dialog.input.text().strip()
-            save_token(token)
-        result = latest_release(token)
+        result = latest_release()
         if result is None:
             QMessageBox.information(parent, "Book Work Clock", "You're using the latest published version.")
             return False
@@ -180,9 +132,9 @@ def check_for_updates(parent):
             "Download the verified installer, update, and restart the application?"
         ) != QMessageBox.StandardButton.Yes:
             return False
-        installer = download_installer(token, asset, digest)
+        installer = download_installer(asset, digest)
         launch_installer(installer)
         return True
-    except (requests.RequestException, OSError, RuntimeError, keyring.errors.KeyringError) as exc:
+    except (requests.RequestException, OSError, RuntimeError) as exc:
         QMessageBox.warning(parent, "Update check failed", str(exc))
         return False

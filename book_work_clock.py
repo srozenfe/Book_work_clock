@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-import re
 import winreg
 import sqlite3
 import sys
@@ -758,6 +757,9 @@ class MainWindow(QMainWindow):
             user32.GetForegroundWindow() == int(self.winId())
         ):
             self.detection.setText("Detection: Book Work Clock window")
+            # The user has been in the tracker window; returning to a
+            # registered document is an explicit foreground transition.
+            self.pause_needs_leave = False
             return
         book_id = self.find_matching_book(process, title)
         idle = idle_seconds() >= IDLE_SECONDS

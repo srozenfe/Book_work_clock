@@ -47,6 +47,21 @@ jobs:
           $dll = Get-ChildItem -Path "dist/BookWorkClock" -Filter "python312.dll" -Recurse
           if (!$dll) { throw "Bundled python312.dll missing" }
           Write-Host "Python DLL packaged in stable application directory: $($dll.FullName)"
+      - name: Smoke-test packaged Windows application
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path "dist/BookWorkClock/BookWorkClock.exe").Path
+          $p = Start-Process -FilePath $exe -ArgumentList "--background" -PassThru
+          try {
+            Start-Sleep -Seconds 8
+            $p.Refresh()
+            if ($p.HasExited) {
+              throw "Book Work Clock exited during startup with code $($p.ExitCode)"
+            }
+            Write-Host "Application process launched successfully with bundled Python runtime."
+          } finally {
+            if (!$p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
       - name: Build Windows installer

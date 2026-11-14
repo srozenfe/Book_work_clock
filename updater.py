@@ -65,6 +65,11 @@ def github_headers(token, binary=False):
 
 def latest_release(token):
     response = requests.get(API_URL, headers=github_headers(token), timeout=15)
+    if response.status_code == 404:
+        raise RuntimeError(
+            "No published release found, or your token cannot read this "
+            "private repository. Publish a versioned release to enable updates."
+        )
     response.raise_for_status()
     release = response.json()
     try:

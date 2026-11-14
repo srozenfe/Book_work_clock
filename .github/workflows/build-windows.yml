@@ -53,9 +53,17 @@ jobs:
           if-no-files-found: error
 
       - name: Publish versioned GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          gh release create "${{ github.ref_name }}" "dist/installer/BookWorkClock-Setup.exe" --title "${{ github.ref_name }}" --notes "Windows installer with bundled Python runtime." --verify-tag
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $tag = $env:GITHUB_REF_NAME
+            gh release create $tag "dist/installer/BookWorkClock-Setup.exe" --title $tag --notes "Windows installer with bundled Python runtime." --verify-tag
+          } else {
+            $version = python -c "from updater import APP_VERSION; print(APP_VERSION)"
+            $tag = "v$version"
+            gh release create $tag "dist/installer/BookWorkClock-Setup.exe" --title $tag --notes "Windows installer with bundled Python runtime." --target $env:GITHUB_SHA
+          }
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release publishing failed. Bump APP_VERSION and installer version for a new release." }

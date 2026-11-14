@@ -602,7 +602,7 @@ class MainWindow(QMainWindow):
         )
         outer.addWidget(self.earnings_label)
         self.books_list.currentItemChanged.connect(
-            lambda current, previous: self.refresh_history()
+            lambda current, previous: self.on_book_selected()
         )
         self.history_heading = QLabel("Work history — selected book")
         outer.addWidget(self.history_heading)
@@ -731,6 +731,11 @@ class MainWindow(QMainWindow):
         if check_for_updates(self):
             self.exit_app()
 
+    def on_book_selected(self):
+        # A row selected for Book A must never remain selected when viewing B.
+        self.table.clearSelection()
+        self.refresh_history()
+
     def refresh_history(self):
         selected_book = self.selected_book()
         rows = self.store.history(selected_book)
@@ -742,6 +747,7 @@ class MainWindow(QMainWindow):
             f"Work history — {book_title} ({len(rows)} entries)"
         )
         selected_session = self.selected_session()
+        self.table.clearSelection()
         self.table.setRowCount(len(rows))
         for i, (session_id, title, start, end, seconds, manual, note, edited) in enumerate(rows):
             kind = "Manual" if manual else "Automatic"
@@ -762,9 +768,10 @@ class MainWindow(QMainWindow):
         self.update_earnings()
 
     def selected_session(self):
-        row = self.table.currentRow()
-        if row < 0:
+        selected = self.table.selectedItems()
+        if not selected:
             return None
+        row = selected[0].row()
         item = self.table.item(row, 0)
         return item.data(Qt.ItemDataRole.UserRole) if item else None
 

@@ -14,13 +14,15 @@ def ensure_manual_schema(db):
         db.execute("ALTER TABLE sessions ADD COLUMN is_manual INTEGER NOT NULL DEFAULT 0")
     if "note" not in columns:
         db.execute("ALTER TABLE sessions ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+    if "edited_at" not in columns:
+        db.execute("ALTER TABLE sessions ADD COLUMN edited_at TEXT")
     db.commit()
 
 
 class ManualSessionDialog(QDialog):
-    def __init__(self, books, parent=None, record=None):
+    def __init__(self, books, parent=None, record=None, source="Manual"):
         super().__init__(parent)
-        self.setWindowTitle("Edit manual work time" if record else "Add manual work time")
+        self.setWindowTitle(f"Edit {source.lower()} work time" if record else "Add manual work time")
         self.book = QComboBox()
         for book_id, title, path in books:
             self.book.addItem(title, book_id)

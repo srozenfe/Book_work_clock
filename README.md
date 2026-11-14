@@ -14,7 +14,38 @@ A small, privacy-friendly Windows 11 desktop application that tracks time spent 
 - Keep historical time when a book is removed (archived), and show recent time entries.
 - Run in the Windows notification area when the main window is closed.
 
-## Install on Windows 11
+## Windows 11 installer (recommended)
+
+No Python installation is required for end users. The Windows build workflow
+packages the Python interpreter and all dependencies inside `BookWorkClock.exe`,
+then creates `BookWorkClock-Setup.exe` with Inno Setup.
+
+1. Open **GitHub → Actions → Build Windows installer**.
+2. Choose the latest successful run and download the **BookWorkClock-Windows** artifact.
+3. Extract it and run **BookWorkClock-Setup.exe**.
+4. In the installer, keep **Start Book Work Clock in the background when Windows starts**
+   selected (enabled by default). This uses the current-user Windows Run entry and
+   does **not** need administrator permissions.
+5. Launch the app from Start menu or desktop. Thereafter it will start in the
+   system tray when you sign in to Windows.
+
+The main window also has a **Start minimized with Windows** checkbox, allowing
+you to enable or disable automatic startup whenever you like.
+
+**Note:** This release workflow produces build artifacts, not a public signed
+installer. Windows SmartScreen may warn because the executable is unsigned.
+Only install binaries from your own trusted GitHub Actions run.
+
+## Manual work time entries
+
+Below the session history, use **+ Add manual time** to select a book,
+set start/end date-times, and optionally enter a note. Select a **Manual** entry
+in the history and click **Edit manual time** or **Remove manual time**.
+Auto-recorded entries are deliberately protected from manual deletion and edits
+in this first version. All time, including manual entries, is counted in book totals.
+Old databases are migrated automatically while retaining existing records.
+
+## Developer install on Windows 11
 
 1. Download/clone the repository and open PowerShell in its folder.
 2. Install Python 3.11+ from python.org, if it is not already installed.
@@ -74,11 +105,11 @@ The output is in `dist\BookWorkClock.exe`.
 - Tracking is **activity/foreground detection**, not proof of writing or actual document edits. Reading and thinking can also be counted at your choice.
 - A paused or stopped session is recorded as one or more time segments. There is not yet a separate pause-event log, manual time correction, or CSV/Excel export.
 - When the user chooses *Keep tracking* outside Word, time continues until the registered Word window returns or the timer is manually paused/stopped. Subsequent foreground switches while outside Word are not repeatedly prompted.
-- This MVP has a basic interface and needs real-world testing for focus changes, sleep/wake, idle prompt timing, clock accuracy and window title variations.
+- The desktop interface has been refreshed but does **not yet exactly reproduce the earlier design concept** (sidebar, large summary cards, charts). It needs further UI work and real-world testing for focus changes, sleep/wake, idle prompt timing, clock accuracy and window title variations.
 
 ## Planned improvements
 
 - Better book identification through Microsoft Word automation and multiple documents per book.
 - Per-book dashboard with daily/weekly/monthly summaries and export to CSV.
-- Explicit pause/resume event log and editing historical entries.
-- Configurable idle threshold, desktop notifications, and Windows startup support.
+- Explicit pause/resume event log and editing **automatically** tracked historical entries.
+- Configurable idle threshold, better desktop notifications, and a closer match to the design mockup.

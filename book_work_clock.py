@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QHBoxLayout, QInputDialog, QLabel, QListWidget,
     QMainWindow, QMessageBox, QPushButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget, QSystemTrayIcon, QMenu,
+    QTabWidget, QRadioButton, QButtonGroup, QGroupBox,
 )
 from PySide6.QtGui import QAction, QIcon
 
@@ -221,6 +222,9 @@ class Store:
             INSERT OR IGNORE INTO book_documents(book_id, document_path)
             SELECT id, document_path FROM books
             WHERE document_path IS NOT NULL AND TRIM(document_path) != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM book_documents bd WHERE bd.book_id=books.id
+              )
         """)
         self.db.commit()
 
@@ -266,6 +270,31 @@ class Store:
         return self.db.execute(
             "SELECT id,title,document_path FROM books WHERE archived=0 ORDER BY title"
         ).fetchall()
+
+    def archived_books(self):
+        return self.db.execute(
+            "SELECT id,title,document_path FROM books WHERE archived=1 ORDER BY title"
+        ).fetchall()
+
+    def restore_book(self, book_id):
+        archived = self.db.execute(
+            "SELECT title,archived FROM books WHERE id=?", (book_id,)
+        ).fetchone()
+        if not archived or not archived[1]:
+            raise ValueError("This book is not in the archive.")
+        paths = self.document_paths(book_id)
+        conflicts = [
+            record for record in self._find_conflicts(
+                archived[0], paths, exclude_id=book_id
+            ) if not record[1]
+        ]
+        if conflicts:
+            raise ValueError(
+                "This book or its document already belongs to an active book. "
+                "Edit the conflicting active book before restoring."
+            )
+        with self.db:
+            self.db.execute("UPDATE books SET archived=0 WHERE id=?", (book_id,))
 
     @staticmethod
     def _path_key(path):
@@ -508,6 +537,66 @@ class BookDialog(QDialog):
         return self.title_input.text().strip(), self.paths()
 
 
+class InterruptionDialog(QDialog):
+    """Foreground interruption choice with an explicit active-book selection.
+
+    Exactly one book can receive work time. This prevents accidentally
+    double-counting simultaneous Word and PDF windows.
+    """
+    def __init__(self, books, current_book, reason, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Book Work Clock — interruption detected")
+        self.setWindowFlags(
+            self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setMinimumWidth(430)
+        self.action = None
+        layout = QVBoxLayout(self)
+        reason_label = QLabel(reason)
+        reason_label.setWordWrap(True)
+        layout.addWidget(reason_label)
+        layout.addWidget(QLabel("Choose the book that should continue counting:"))
+        group_box = QGroupBox("Active books")
+        choices_layout = QVBoxLayout(group_box)
+        self.group = QButtonGroup(self)
+        self.radio_buttons = {}
+        for book_id, title, _ in books:
+            radio = QRadioButton(title)
+            self.group.addButton(radio, book_id)
+            self.radio_buttons[book_id] = radio
+            choices_layout.addWidget(radio)
+        layout.addWidget(group_box)
+        if current_book in self.radio_buttons:
+            self.radio_buttons[current_book].setChecked(True)
+        elif books:
+            self.radio_buttons[books[0][0]].setChecked(True)
+
+        buttons = QHBoxLayout()
+        for label, action in (
+            ("Keep tracking selected book", "keep"),
+            ("Pause", "pause"),
+            ("Stop", "stop"),
+            ("Pause + don't ask again", "disable"),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(
+                lambda checked=False, choice=action: self.choose(choice)
+            )
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+
+    def chosen_book(self):
+        value = self.group.checkedId()
+        return value if value >= 0 else None
+
+    def choose(self, action):
+        if action == "keep" and self.chosen_book() is None:
+            QMessageBox.warning(self, "Choose a book", "Select an active book.")
+            return
+        self.action = action
+        self.accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -582,20 +671,34 @@ class MainWindow(QMainWindow):
         self.update_btn.clicked.connect(self.check_updates)
         outer.addWidget(self.update_btn)
 
-        outer.addWidget(QLabel("Books (select a book to start manually):"))
+        self.book_tabs = QTabWidget()
+        active_tab = QWidget()
+        active_layout = QVBoxLayout(active_tab)
+        active_layout.addWidget(QLabel("Active books — select a book to see its history:"))
         self.books_list = QListWidget()
-        outer.addWidget(self.books_list)
+        active_layout.addWidget(self.books_list)
         book_buttons = QHBoxLayout()
         for name, handler in (
             ("Add book", self.add_book),
             ("Edit", self.edit_book),
-            ("Remove", self.remove_book),
+            ("Send to archive", self.remove_book),
             ("Payment / earnings", self.edit_payment),
         ):
             button = QPushButton(name)
             button.clicked.connect(handler)
             book_buttons.addWidget(button)
-        outer.addLayout(book_buttons)
+        active_layout.addLayout(book_buttons)
+        archive_tab = QWidget()
+        archive_layout = QVBoxLayout(archive_tab)
+        archive_layout.addWidget(QLabel("Archived books — work history is preserved:"))
+        self.archive_list = QListWidget()
+        archive_layout.addWidget(self.archive_list)
+        restore_button = QPushButton("Return selected book to Active")
+        restore_button.clicked.connect(self.restore_archived_book)
+        archive_layout.addWidget(restore_button)
+        self.book_tabs.addTab(active_tab, "Active")
+        self.book_tabs.addTab(archive_tab, "Archive")
+        outer.addWidget(self.book_tabs)
         self.earnings_label = QLabel("Select a book to see earnings")
         self.earnings_label.setStyleSheet(
             "font-size: 16px; font-weight: bold; padding: 10px; color: #1762c0;"
@@ -674,6 +777,43 @@ class MainWindow(QMainWindow):
                 self.books_list.setCurrentRow(0)
         finally:
             self.books_list.blockSignals(False)
+        # Refresh archived view independently of the active selection.
+        archived_selected = self.selected_archived_book()
+        self.archive_list.clear()
+        from PySide6.QtWidgets import QListWidgetItem
+        for book_id, title, path in self.store.archived_books():
+            item = QListWidgetItem(
+                f"{title}    —    {format_duration(totals.get(book_id, 0))}"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, book_id)
+            item.setToolTip("\\n".join(self.store.document_paths(book_id)))
+            self.archive_list.addItem(item)
+            if book_id == archived_selected:
+                self.archive_list.setCurrentItem(item)
+        self.book_tabs.setTabText(0, f"Active ({self.books_list.count()})")
+        self.book_tabs.setTabText(1, f"Archive ({self.archive_list.count()})")
+
+    def selected_archived_book(self):
+        if not hasattr(self, "archive_list"):
+            return None
+        item = self.archive_list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def restore_archived_book(self):
+        book_id = self.selected_archived_book()
+        if book_id is None:
+            QMessageBox.information(
+                self, "Select a book", "Select an archived book to restore."
+            )
+            return
+        try:
+            self.store.restore_book(book_id)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Unable to restore book", str(exc))
+            return
+        self.book_tabs.setCurrentIndex(0)
+        self.refresh_books(select_book_id=book_id)
+        self.refresh_history()
 
     def update_earnings(self):
         book_id = self.selected_book()
@@ -870,7 +1010,7 @@ class MainWindow(QMainWindow):
         if book_id is None:
             return
         reply = QMessageBox.question(
-            self, "Remove book", "Hide this book from the list? Its time history will be preserved."
+            self, "Remove book", "Move this book to the Archive? Its time history will be preserved."
         )
         if reply == QMessageBox.StandardButton.Yes:
             if self.current_book == book_id:
@@ -952,42 +1092,42 @@ class MainWindow(QMainWindow):
         self.begin(book_id)
 
     def interrupt(self, reason):
-        # The alert itself steals focus; don't poll again until it is dismissed.
         if self.segment_id is None:
             return
-        dialog = QMessageBox(None)
-        dialog.setWindowFlags(
-            dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint
-        )
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        dialog.setWindowTitle("Book Work Clock — interruption detected")
-        dialog.setText(reason)
-        dialog.setInformativeText("Should the writing timer keep running?")
-        keep = dialog.addButton("Keep tracking", QMessageBox.ButtonRole.AcceptRole)
-        pause = dialog.addButton("Pause", QMessageBox.ButtonRole.ActionRole)
-        stop = dialog.addButton("Stop", QMessageBox.ButtonRole.ActionRole)
-        disable = dialog.addButton(
-            "Pause + don't ask again", QMessageBox.ButtonRole.DestructiveRole
+        dialog = InterruptionDialog(
+            self.store.books(), self.current_book, reason
         )
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
         dialog.exec()
-        chosen = dialog.clickedButton()
-        if chosen == pause:
+        action = dialog.action
+        if action == "pause":
             self.user_pause()
-        elif chosen == stop:
+        elif action == "stop":
             self.stop()
-        elif chosen == disable:
+        elif action == "disable":
             self.user_pause()
             self.auto_box.setChecked(False)
-        elif chosen == keep:
+        elif action == "keep":
+            selected = dialog.chosen_book()
+            if selected not in {book_id for book_id, _, _ in self.store.books()}:
+                self.user_pause()
+                return
+            if selected != self.current_book:
+                self.begin(selected)
             self.continue_outside_word = True
             self.idle_prompt_suppressed = True
+            self.status.setText(
+                "Tracking chosen book: " + next(
+                    name for ident, name, _ in self.store.books()
+                    if ident == selected
+                )
+            )
         else:
-            # Dismissing the dialog means no change to running time.
-            self.continue_outside_word = True
-            self.idle_prompt_suppressed = True
+            # Close/X is not an affirmative choice to bill idle time.
+            self.user_pause()
+
 
     def tick(self):
         if self.segment_id is not None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import winreg
 import sqlite3
 import sys
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import psutil
 from PySide6.QtCore import Qt, QTimer
+from manual_time import ManualSessionDialog, ensure_manual_schema
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QHBoxLayout, QInputDialog, QLabel, QListWidget,
@@ -22,6 +24,36 @@ from PySide6.QtGui import QAction, QIcon
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "BookWorkClock"
 DB_FILE = APP_DIR / "work_clock.sqlite3"
 IDLE_SECONDS = 15
+STARTUP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+STARTUP_NAME = "BookWorkClock"
+
+
+def startup_command():
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}" --background'
+    return f'"{sys.executable}" "{Path(__file__).resolve()}" --background'
+
+
+def startup_enabled():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, STARTUP_NAME)
+            return value == startup_command()
+    except OSError:
+        return False
+
+
+def configure_startup(enabled):
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, STARTUP_KEY) as key:
+        if enabled:
+            winreg.SetValueEx(key, STARTUP_NAME, 0, winreg.REG_SZ, startup_command())
+        else:
+            try:
+                winreg.DeleteValue(key, STARTUP_NAME)
+            except FileNotFoundError:
+                pass
+
+
 user32 = ctypes.windll.user32 if sys.platform == "win32" else None
 
 
@@ -98,6 +130,7 @@ class Store:
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_book ON sessions(book_id);
         """)
+        ensure_manual_schema(self.db)
         self.db.commit()
 
     def books(self):
@@ -137,9 +170,42 @@ class Store:
         )
         self.db.commit()
 
+    def add_manual(self, book_id, start, end, note):
+        duration = (end - start).total_seconds()
+        if duration <= 0:
+            raise ValueError("End must be after start")
+        self.db.execute(
+            "INSERT INTO sessions (book_id,started_at,ended_at,seconds,is_manual,note) VALUES (?,?,?,?,1,?)",
+            (book_id, start.isoformat(timespec="seconds"),
+             end.isoformat(timespec="seconds"), duration, note)
+        )
+        self.db.commit()
+
+    def get_manual(self, session_id):
+        return self.db.execute(
+            "SELECT id,book_id,started_at,ended_at,note FROM sessions WHERE id=? AND is_manual=1",
+            (session_id,)
+        ).fetchone()
+
+    def edit_manual(self, session_id, book_id, start, end, note):
+        duration = (end - start).total_seconds()
+        if duration <= 0:
+            raise ValueError("End must be after start")
+        self.db.execute(
+            """UPDATE sessions SET book_id=?, started_at=?, ended_at=?, seconds=?, note=?
+               WHERE id=? AND is_manual=1""",
+            (book_id, start.isoformat(timespec="seconds"),
+             end.isoformat(timespec="seconds"), duration, note, session_id)
+        )
+        self.db.commit()
+
+    def remove_manual(self, session_id):
+        self.db.execute("DELETE FROM sessions WHERE id=? AND is_manual=1", (session_id,))
+        self.db.commit()
+
     def history(self):
         return self.db.execute("""
-            SELECT b.title,s.started_at,s.ended_at,s.seconds
+            SELECT s.id,b.title,s.started_at,s.ended_at,s.seconds,s.is_manual,s.note
             FROM sessions s JOIN books b ON b.id=s.book_id
             ORDER BY s.id DESC LIMIT 300
         """).fetchall()

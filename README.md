@@ -62,29 +62,28 @@ the tray. Double-clicking the desktop shortcut opens the existing running
 dashboard (never a second timer) and checks for updates. If the app was not
 running, the shortcut launches it and then checks for updates.
 
-Updates come from the **latest published tagged GitHub Release**, not every
-source commit. For this PRIVATE repository, on the first update check the app
-asks for a **fine-grained GitHub personal access token** limited to the
-`srozenfe/Book_work_clock` repository with **Contents: read-only** permission.
-The token is stored in Windows Credential Manager, **not** in the local
-SQLite file, script, or the GitHub repository. You can revoke it from GitHub.
-If you decline token setup, the app remains fully usable, but can't check
-private releases.
+Updates are checked against the latest **published GitHub Release** without
+authentication. You must make the GitHub repository **public** for this
+feature to work. No GitHub token is required, requested, or saved by v0.3.1.
 
 When a newer release contains `BookWorkClock-Setup.exe`, the app asks for
-confirmation, downloads the release asset, checks the SHA-256 digest published
-by GitHub, runs the installer, and relaunches itself. The installer preserves
-your local user data. Update checking on the desktop launcher is user-initiated;
-background startup does not check or download.
+confirmation, downloads the installer, verifies the SHA-256 digest from GitHub,
+installs it and relaunches the app. Existing local data remains in
+`%LOCALAPPDATA%\\BookWorkClock`. Closing the launcher doesn't create a second
+timer: it signals the running background instance.
+
+If you previously used v0.3.0 and saved a GitHub token, v0.3.1 no longer
+reads it; you can remove the old `BookWorkClock-GitHub-Readonly` credential
+in **Windows Credential Manager** and revoke the token in GitHub.
 
 ### Publishing an update
 
-To make the **first update-installable release**, open GitHub **Actions → Build
+To make the **next update-installable release**, open GitHub **Actions → Build
 Windows installer → Run workflow** on the `main` branch. A successful manual
-run builds the installer and publishes the versioned release (currently `v0.3.0`).
+run builds the installer and publishes the versioned release (currently `v0.3.1`).
 
 For **subsequent updates**, increment both `APP_VERSION` in `updater.py` and
-`MyAppVersion` in `installer/BookWorkClock.iss` (for example to `0.3.1`),
+`MyAppVersion` in `installer/BookWorkClock.iss` (for example to `0.3.2`),
 commit the change, and run the same workflow manually. The release tag is
 created by the workflow. A release with the same version cannot be overwritten;
 use a new version for every update. Pushing a `v*` tag also publishes a release.

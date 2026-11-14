@@ -1,6 +1,6 @@
 ; Book Work Clock per-user installer built from a PyInstaller executable.
 #define MyAppName "Book Work Clock"
-#define MyAppVersion "0.2.0"
+#define MyAppVersion "0.3.0"
 #define MyAppExeName "BookWorkClock.exe"
 
 [Setup]
@@ -23,10 +23,9 @@ Source: "..\dist\BookWorkClock.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Book Work Clock"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\Book Work Clock"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\Book Work Clock"; Filename: "{app}\{#MyAppExeName}"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
 Name: "autostart"; Description: "Start Book Work Clock in the background when Windows starts"; GroupDescription: "Startup:"; Flags: checkedonce
 
 [Registry]

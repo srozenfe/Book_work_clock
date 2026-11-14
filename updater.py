@@ -121,17 +121,25 @@ def download_installer(token, asset, expected_digest):
 
 
 def launch_installer(installer):
-    # Inno Setup closes/replaces the installed EXE, then launches the updated app.
-    # Launch an external process so that this application can exit cleanly.
-    installed_exe = Path(sys.executable)
+    """Exit the old application, install, and reopen the updated executable."""
     if not getattr(sys, "frozen", False):
-        raise RuntimeError("In-app installation is supported only in packaged builds")
-    # The installer itself is responsible for closing the old running application.
+        raise RuntimeError("In-app installation requires the installed Windows executable")
+    installed_exe = Path(sys.executable)
+    # The script runs outside the Python application, allowing its executable
+    # and Qt libraries to be replaced after the application closes.
+    script = installer.parent / "finish-update.cmd"
+    script.write_text(
+        "@echo off\n"
+        "timeout /t 3 /nobreak >nul\n"
+        f'start /wait "" "{installer}" /SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS\n'
+        "if errorlevel 1 exit /b 1\n"
+        f'start "" "{installed_exe}"\n',
+        encoding="utf-8",
+    )
     subprocess.Popen(
-        [str(installer), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
-         "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"],
+        ["cmd.exe", "/c", str(script)],
+        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
         close_fds=True,
-        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
     )
 
 

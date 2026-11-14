@@ -14,6 +14,30 @@ A small, privacy-friendly Windows 11 desktop application that tracks time spent 
 - Keep historical time when a book is removed (archived), and show recent time entries.
 - Run in the Windows notification area when the main window is closed.
 
+## Windows runtime packaging repair (v0.3.3)
+
+v0.3.2 and older used a self-extracting `--onefile` executable. A Windows
+machine may report "Failed to load Python DLL" in a temporary `_MEI...`
+folder, caused by missing/extracted runtime dependencies, security software,
+or an incomplete extraction. This error is not evidence that Python needs to
+be installed separately.
+
+Starting in **v0.3.3**, CI builds an `--onedir` application folder, bundles
+the `python312.dll` and Qt dependencies within the installation directory,
+checks that the DLL exists and smoke-tests the executable startup before
+publishing. The Inno installer installs the complete folder. Do not copy only
+the new EXE out of the folder: install using `BookWorkClock-Setup.exe`.
+
+If the existing v0.3.2 EXE fails before it can check for updates, install the
+v0.3.3 setup manually from GitHub Releases once. Exit any old background
+instance before installing. Your database remains at
+`%LOCALAPPDATA%\\BookWorkClock\\work_clock.sqlite3`, outside the
+program folder, so it is preserved across installation.
+
+If a DLL load failure persists, inspect Windows Security Protection History
+for quarantined files and verify Windows 11 x64 compatibility; share the
+result before disabling any security protections.
+
 ## Windows 11 installer (recommended)
 
 No Python installation is required for end users. The Windows build workflow

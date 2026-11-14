@@ -787,11 +787,17 @@ class MainWindow(QMainWindow):
 
         if book_id is not None:
             self.last_nonword_alert = False
-            if self.current_book != book_id:
-                self.continue_outside_word = False
+            self.continue_outside_word = False
 
         if self.auto_enabled and not idle and book_id is not None:
-            if not self.pause_needs_leave:
+            # A *new* user input while the registered document is foreground
+            # resumes a paused session. This covers pauses made from an idle
+            # alert while Word remains in front, not just switching windows.
+            fresh_input = (
+                self.resume_guard is not None
+                and last_input_tick() != self.resume_guard
+            )
+            if not self.pause_needs_leave or fresh_input:
                 if book_id != self.current_book or self.segment_id is None:
                     self.begin(book_id)
 

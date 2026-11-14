@@ -40,6 +40,14 @@ class LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
 
 
+def last_input_tick() -> int:
+    info = LASTINPUTINFO()
+    info.cbSize = ctypes.sizeof(info)
+    if user32 is not None and user32.GetLastInputInfo(ctypes.byref(info)):
+        return info.dwTime
+    return 0
+
+
 def idle_seconds() -> float:
     if user32 is None:
         return 0
@@ -197,7 +205,7 @@ class MainWindow(QMainWindow):
         self.last_idle_alert = False
         self.last_nonword_alert = False
         self.continue_outside_word = False
-        self.current_title = None
+        self.resume_guard = None  # input tick when user chose to pause
         self.setWindowTitle("Book Work Clock")
         self.resize(860, 590)
         self.build_ui()
@@ -229,7 +237,7 @@ class MainWindow(QMainWindow):
         self.auto_box.setChecked(True)
         self.auto_box.toggled.connect(self.set_auto)
         self.start_btn.clicked.connect(self.manual_start)
-        self.pause_btn.clicked.connect(self.pause)
+        self.pause_btn.clicked.connect(self.user_pause)
         self.stop_btn.clicked.connect(self.stop)
         for widget in (self.start_btn, self.pause_btn, self.stop_btn, self.auto_box):
             controls.addWidget(widget)
@@ -341,6 +349,8 @@ class MainWindow(QMainWindow):
 
     def set_auto(self, enabled):
         self.auto_enabled = enabled
+        if not enabled and self.segment_id is not None:
+            self.user_pause()
         self.status.setText(
             "Automatic tracking enabled" if enabled else "Manual mode — auto-start disabled"
         )
@@ -364,6 +374,7 @@ class MainWindow(QMainWindow):
             return
         self.pause()
         self.current_book = book_id
+        self.resume_guard = None
         self.segment_id = self.store.start_segment(book_id)
         self.segment_started = time.monotonic()
         self.last_idle_alert = False
@@ -382,9 +393,14 @@ class MainWindow(QMainWindow):
             self.refresh_history()
         self.status.setText("Paused")
 
+    def user_pause(self):
+        self.pause()
+        self.resume_guard = last_input_tick()
+
     def stop(self):
         self.pause()
         self.current_book = None
+        self.resume_guard = last_input_tick()
         self.status.setText("Stopped — automatic tracking remains available")
 
     def manual_start(self):
@@ -393,6 +409,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Select a book", "Select a book first.")
             return
         self.auto_box.setChecked(True)
+        self.resume_guard = None
         self.begin(book_id)
 
     def interrupt(self, reason):
@@ -412,11 +429,11 @@ class MainWindow(QMainWindow):
         dialog.exec()
         chosen = dialog.clickedButton()
         if chosen == pause:
-            self.pause()
+            self.user_pause()
         elif chosen == stop:
             self.stop()
         elif chosen == disable:
-            self.pause()
+            self.user_pause()
             self.auto_box.setChecked(False)
         elif chosen == keep:
             self.continue_outside_word = True
@@ -432,6 +449,9 @@ class MainWindow(QMainWindow):
         else:
             self.clock.setText("00:00:00")
 
+        # Opening the app to manage books must not itself trigger an interruption.
+        if user32.GetForegroundWindow() == int(self.winId()):
+            return
         word_title = foreground_word_title()
         # Ignore this application's own foreground window; it is used for controls.
         word_book = self.find_matching_book(word_title)
@@ -445,7 +465,11 @@ class MainWindow(QMainWindow):
             self.continue_outside_word = False
 
         if self.auto_enabled and not idle and word_book is not None:
-            if word_book != self.current_book or self.segment_id is None:
+            can_resume = (
+                self.resume_guard is None
+                or last_input_tick() != self.resume_guard
+            )
+            if can_resume and (word_book != self.current_book or self.segment_id is None):
                 self.begin(word_book)
 
         if self.segment_id is None:

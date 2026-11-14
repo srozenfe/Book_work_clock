@@ -273,7 +273,19 @@ class MainWindow(QMainWindow):
         self.continue_outside_word = False
         self.resume_guard = None  # input tick when user chose to pause
         self.setWindowTitle("Book Work Clock")
-        self.resize(860, 590)
+        self.resize(1030, 720)
+        self.setStyleSheet("""
+            QMainWindow, QWidget { background: #f4f7fb; color: #1d2d45; }
+            QLabel { font-size: 13px; }
+            QPushButton { background: #e5edfa; border: 1px solid #d5dfed;
+                          border-radius: 7px; padding: 8px 12px; }
+            QPushButton:hover { background: #d8e6fa; }
+            QListWidget, QTableWidget { background: white;
+                          border: 1px solid #d9e3f1; border-radius: 8px;
+                          selection-background-color: #d6e7ff; }
+            QHeaderView::section { background: #edf2fa; padding: 8px;
+                                  border: none; font-weight: bold; }
+        """)
         self.build_ui()
         self.refresh_books()
         self.refresh_history()
@@ -286,13 +298,13 @@ class MainWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        heading = QLabel("Book Work Clock")
-        heading.setStyleSheet("font-size: 24px; font-weight: bold;")
+        heading = QLabel("Book Work Clock  •  Writing Dashboard")
+        heading.setStyleSheet("font-size: 26px; font-weight: bold; padding: 8px;")
         outer.addWidget(heading)
         self.status = QLabel("Ready — open a registered Word document to start")
         outer.addWidget(self.status)
         self.clock = QLabel("00:00:00")
-        self.clock.setStyleSheet("font-size: 38px; font-weight: bold;")
+        self.clock.setStyleSheet("font-size: 40px; font-weight: bold; color: #2563c8; padding: 8px;")
         outer.addWidget(self.clock)
 
         controls = QHBoxLayout()
@@ -302,12 +314,16 @@ class MainWindow(QMainWindow):
         self.auto_box = QCheckBox("Automatic tracking enabled")
         self.auto_box.setChecked(True)
         self.auto_box.toggled.connect(self.set_auto)
+        self.startup_box = QCheckBox("Start minimized with Windows")
+        self.startup_box.setChecked(startup_enabled())
+        self.startup_box.toggled.connect(self.set_startup)
         self.start_btn.clicked.connect(self.manual_start)
         self.pause_btn.clicked.connect(self.user_pause)
         self.stop_btn.clicked.connect(self.stop)
         for widget in (self.start_btn, self.pause_btn, self.stop_btn, self.auto_box):
             controls.addWidget(widget)
         outer.addLayout(controls)
+        outer.addWidget(self.startup_box)
 
         outer.addWidget(QLabel("Books (select a book to start manually):"))
         self.books_list = QListWidget()
@@ -323,11 +339,25 @@ class MainWindow(QMainWindow):
             book_buttons.addWidget(button)
         outer.addLayout(book_buttons)
         outer.addWidget(QLabel("Recent tracked periods:"))
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Book", "Start", "End", "Duration"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ["Book", "Start", "End", "Duration", "Type", "Notes"]
+        )
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         outer.addWidget(self.table)
+        manual_row = QHBoxLayout()
+        for label, fn in (
+            ("+ Add manual time", self.add_manual_entry),
+            ("Edit manual time", self.edit_manual_entry),
+            ("Remove manual time", self.remove_manual_entry),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(fn)
+            manual_row.addWidget(button)
+        outer.addLayout(manual_row)
         refresh = QPushButton("Refresh history")
         refresh.clicked.connect(self.refresh_history)
         outer.addWidget(refresh)
@@ -372,14 +402,64 @@ class MainWindow(QMainWindow):
     def refresh_history(self):
         rows = self.store.history()
         self.table.setRowCount(len(rows))
-        for i, row in enumerate(rows):
-            for j, value in enumerate(row):
-                if j in (1, 2):
-                    value = value.replace("T", " ")[:19]
-                if j == 3:
-                    value = format_duration(value)
-                self.table.setItem(i, j, QTableWidgetItem(str(value)))
+        for i, (session_id, title, start, end, seconds, manual, note) in enumerate(rows):
+            values = (
+                title, start.replace("T", " ")[:19], end.replace("T", " ")[:19],
+                format_duration(seconds), "Manual" if manual else "Automatic", note
+            )
+            for j, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if j == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, session_id)
+                self.table.setItem(i, j, item)
         self.refresh_books()
+
+    def selected_session(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return None
+        item = self.table.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def add_manual_entry(self):
+        dialog = ManualSessionDialog(self.store.books(), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.store.add_manual(*dialog.values())
+            self.refresh_history()
+
+    def edit_manual_entry(self):
+        session_id = self.selected_session()
+        record = self.store.get_manual(session_id) if session_id is not None else None
+        if record is None:
+            QMessageBox.information(self, "Select a manual entry",
+                                    "Only manual time entries can be edited here.")
+            return
+        dialog = ManualSessionDialog(self.store.books(), self, record)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.store.edit_manual(session_id, *dialog.values())
+            self.refresh_history()
+
+    def remove_manual_entry(self):
+        session_id = self.selected_session()
+        record = self.store.get_manual(session_id) if session_id is not None else None
+        if record is None:
+            QMessageBox.information(self, "Select a manual entry",
+                                    "Only manual time entries can be removed here.")
+            return
+        if QMessageBox.question(
+            self, "Remove manual time", "Delete the selected manual entry?"
+        ) == QMessageBox.StandardButton.Yes:
+            self.store.remove_manual(session_id)
+            self.refresh_history()
+
+    def set_startup(self, enabled):
+        try:
+            configure_startup(enabled)
+        except OSError as exc:
+            QMessageBox.warning(self, "Startup setting failed", str(exc))
+            self.startup_box.blockSignals(True)
+            self.startup_box.setChecked(startup_enabled())
+            self.startup_box.blockSignals(False)
 
     def add_book(self):
         dialog = BookDialog(self)
@@ -570,7 +650,8 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     window = MainWindow()
-    window.show()
+    if "--background" not in sys.argv or not QSystemTrayIcon.isSystemTrayAvailable():
+        window.show()
     sys.exit(app.exec())
 
 

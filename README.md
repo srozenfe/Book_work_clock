@@ -76,22 +76,29 @@ If you previously used v0.3.0 and saved a GitHub token, v0.3.1 no longer
 reads it; you can remove the old `BookWorkClock-GitHub-Readonly` credential
 in **Windows Credential Manager** and revoke the token in GitHub.
 
-### Publishing an update
+### Publishing an update (automatic)
 
-To make the **next update-installable release**, open GitHub **Actions → Build
-Windows installer → Run workflow** on the `main` branch. A successful manual
-run builds the installer and publishes the versioned release (currently `v0.3.2`).
+When code is committed to `main`, GitHub Actions automatically builds the
+Windows executable and installer. If the application version is newer than any
+existing release, the workflow publishes a tagged GitHub Release with
+`BookWorkClock-Setup.exe`. You no longer need to press **Run workflow**.
 
-For **subsequent updates**, increment both `APP_VERSION` in `updater.py` and
-`MyAppVersion` in `installer/BookWorkClock.iss` (for example to `0.3.3`),
-commit the change, and run the same workflow manually. The release tag is
-created by the workflow. A release with the same version cannot be overwritten;
-use a new version for every update. Pushing a `v*` tag also publishes a release.
+For a new version, increment **both** `APP_VERSION` in `updater.py` and
+`MyAppVersion` in `installer/BookWorkClock.iss` (for example from
+`0.3.2` to `0.3.3`). The release is created automatically after the
+Windows build succeeds. Updates are deliberately **not** published when
+only the code changes without a version bump, avoiding mismatched versions.
 
-**Current note:** This version's updater requires an actual published
-release to exist. Until the first tagged release is published, the update
-check cannot find an installable version. GitHub CI builds and a Windows
-test are still required before relying on automatic update installation.
+The application checks for published updates when you launch it using the
+desktop icon, whether it was closed or already running in the system tray.
+When a newer version is found, you can approve the download, installation,
+and application restart. Startup at Windows sign-in stays in the background
+without interrupting you. The separate **Check GitHub for updates** button
+can be used any time.
+
+The application is unsigned and must be tested on Windows; GitHub CI verifies
+that the executable and installer build, but does not prove the updater works
+correctly in a user's Windows session.
 
 ## Developer install on Windows 11
 

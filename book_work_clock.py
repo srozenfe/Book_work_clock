@@ -913,6 +913,8 @@ class MainWindow(QMainWindow):
         self.last_nonword_alert = False
         self.continue_outside_word = False
         self.status.setText("Tracking writing time")
+        # Follow automatic Word/PDF book switches in the sidebar and history.
+        self.refresh_books(select_book_id=book_id)
         self.refresh_history()
 
     def pause(self):

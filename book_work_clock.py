@@ -199,8 +199,50 @@ class Store:
             CREATE INDEX IF NOT EXISTS idx_sessions_book ON sessions(book_id);
         """)
         ensure_manual_schema(self.db)
+        self.ensure_document_schema()
         self.ensure_payment_schema()
         self.db.commit()
+
+    def ensure_document_schema(self):
+        """Migrate the single legacy path into an optional Word/PDF collection.
+
+        Idempotent: running this migration again never duplicates a document.
+        All existing books, sessions, and historical rates stay untouched.
+        """
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS book_documents (
+                id INTEGER PRIMARY KEY,
+                book_id INTEGER NOT NULL REFERENCES books(id),
+                document_path TEXT NOT NULL,
+                UNIQUE(book_id, document_path)
+            )
+        """)
+        self.db.execute("""
+            INSERT OR IGNORE INTO book_documents(book_id, document_path)
+            SELECT id, document_path FROM books
+            WHERE document_path IS NOT NULL AND TRIM(document_path) != ''
+        """)
+        self.db.commit()
+
+    def document_paths(self, book_id):
+        return [row[0] for row in self.db.execute(
+            "SELECT document_path FROM book_documents WHERE book_id=? ORDER BY id",
+            (book_id,)
+        )]
+
+    def set_document_paths(self, book_id, paths):
+        if not paths:
+            raise ValueError("Select at least one Word or PDF file")
+        self.db.execute("DELETE FROM book_documents WHERE book_id=?", (book_id,))
+        self.db.executemany(
+            "INSERT INTO book_documents(book_id, document_path) VALUES (?,?)",
+            [(book_id, path) for path in dict.fromkeys(paths)]
+        )
+        # Keep old releases/migration compatible, without relying on this path
+        # for tracking. New releases use the book_documents table exclusively.
+        self.db.execute(
+            "UPDATE books SET document_path=? WHERE id=?", (paths[0], book_id)
+        )
 
     def ensure_payment_schema(self):
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(books)")}
@@ -225,16 +267,18 @@ class Store:
             "SELECT id,title,document_path FROM books WHERE archived=0 ORDER BY title"
         ).fetchall()
 
-    def add_book(self, title, path):
-        self.db.execute("INSERT INTO books(title,document_path) VALUES (?,?)", (title, path))
-        self.db.commit()
+    def add_book(self, title, paths):
+        with self.db:
+            cur = self.db.execute(
+                "INSERT INTO books(title,document_path) VALUES (?,?)",
+                (title, paths[0])
+            )
+            self.set_document_paths(cur.lastrowid, paths)
 
-    def edit_book(self, book_id, title, path):
-        self.db.execute(
-            "UPDATE books SET title=?,document_path=? WHERE id=?",
-            (title, path, book_id),
-        )
-        self.db.commit()
+    def edit_book(self, book_id, title, paths):
+        with self.db:
+            self.db.execute("UPDATE books SET title=? WHERE id=?", (title, book_id))
+            self.set_document_paths(book_id, paths)
 
     def archive_book(self, book_id):
         # Keep historical sessions, even when a book is removed from the UI.
@@ -304,23 +348,40 @@ class Store:
 
 
 class BookDialog(QDialog):
-    def __init__(self, parent=None, title="", path=""):
+    """A book can track one Word file, one PDF file, or both."""
+
+    def __init__(self, parent=None, title="", paths=None):
         super().__init__(parent)
         self.setWindowTitle("Book details")
-        self.title_label = QLabel(title or "New book")
         from PySide6.QtWidgets import QLineEdit
         self.title_input = QLineEdit(title)
-        self.path_input = QLineEdit(path)
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(self.browse)
-        path_row = QHBoxLayout()
-        path_row.addWidget(self.path_input)
-        path_row.addWidget(browse)
+        self.word_input = QLineEdit()
+        self.pdf_input = QLineEdit()
+        self.word_input.setPlaceholderText("Optional .doc, .docx or .docm file")
+        self.pdf_input.setPlaceholderText("Optional .pdf file")
+        for path in paths or ():
+            if Path(path).suffix.casefold() == ".pdf":
+                self.pdf_input.setText(path)
+            else:
+                self.word_input.setText(path)
         form = QFormLayout()
         form.addRow("Book title:", self.title_input)
-        form.addRow("Word or PDF document:", path_row)
+        for label, widget, kind in (
+            ("Word document:", self.word_input, "word"),
+            ("PDF document:", self.pdf_input, "pdf")
+        ):
+            row = QHBoxLayout()
+            row.addWidget(widget)
+            browse = QPushButton("Browse…")
+            browse.clicked.connect(lambda checked=False, k=kind: self.browse(k))
+            row.addWidget(browse)
+            form.addRow(label, row)
+        form.addRow(
+            QLabel("Choose Word, PDF, or both. Time in either file counts toward this book.")
+        )
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.validate)
         buttons.rejected.connect(self.reject)
@@ -328,23 +389,51 @@ class BookDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(buttons)
 
-    def browse(self):
+    def browse(self, kind):
+        filt = (
+            "Word documents (*.doc *.docx *.docm)" if kind == "word"
+            else "PDF documents (*.pdf)"
+        )
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose book document", "", "Documents (*.docx *.doc *.docm *.pdf)"
+            self, "Choose " + kind.upper() + " document", "", filt
         )
         if path:
-            self.path_input.setText(path)
+            (self.word_input if kind == "word" else self.pdf_input).setText(path)
             if not self.title_input.text().strip():
                 self.title_input.setText(Path(path).stem)
 
     def validate(self):
-        if not self.title_input.text().strip() or not self.path_input.text().strip():
-            QMessageBox.warning(self, "Missing information", "Enter a title and document.")
+        if not self.title_input.text().strip():
+            QMessageBox.warning(self, "Missing title", "Enter a book title.")
             return
+        paths = self.paths()
+        if not paths:
+            QMessageBox.warning(
+                self, "Missing document", "Choose at least a Word or PDF file."
+            )
+            return
+        for path in paths:
+            ext = Path(path).suffix.casefold()
+            allowed = (".pdf",) if path == self.pdf_input.text().strip() else (
+                ".doc", ".docx", ".docm"
+            )
+            if ext not in allowed:
+                QMessageBox.warning(
+                    self, "Invalid document",
+                    f"The chosen document has an unsupported extension: {path}"
+                )
+                return
         self.accept()
 
+    def paths(self):
+        return [
+            path for path in (
+                self.word_input.text().strip(), self.pdf_input.text().strip()
+            ) if path
+        ]
+
     def values(self):
-        return self.title_input.text().strip(), self.path_input.text().strip()
+        return self.title_input.text().strip(), self.paths()
 
 
 class MainWindow(QMainWindow):
@@ -499,7 +588,7 @@ class MainWindow(QMainWindow):
                 f"{title}    —    {format_duration(totals.get(book_id, 0))}"
             )
             item.setData(Qt.ItemDataRole.UserRole, book_id)
-            item.setToolTip(path)
+            item.setToolTip("\\n".join(self.store.document_paths(book_id)))
             self.books_list.addItem(item)
             if book_id == selected:
                 self.books_list.setCurrentItem(item)
@@ -636,7 +725,7 @@ class MainWindow(QMainWindow):
         book = next((b for b in self.store.books() if b[0] == book_id), None)
         if not book:
             return
-        dialog = BookDialog(self, book[1], book[2])
+        dialog = BookDialog(self, book[1], self.store.document_paths(book_id))
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.store.edit_book(book_id, *dialog.values())
             self.refresh_books()
@@ -664,12 +753,15 @@ class MainWindow(QMainWindow):
         )
 
     def find_matching_book(self, process, title):
-        matches = [
-            book_id for book_id, _, path in self.store.books()
-            if title_matches_document(title, path, process)
-        ]
-        # Ambiguous titles never automatically charge the wrong book.
-        return matches[0] if len(matches) == 1 else None
+        matched = []
+        for book_id, _, _ in self.store.books():
+            if any(
+                title_matches_document(title, path, process)
+                for path in self.store.document_paths(book_id)
+            ):
+                matched.append(book_id)
+        # Never bill an ambiguous document title to an arbitrary book.
+        return matched[0] if len(matched) == 1 else None
 
     def begin(self, book_id):
         if self.segment_id is not None and self.current_book == book_id:

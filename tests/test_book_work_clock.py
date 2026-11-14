@@ -126,5 +126,36 @@ class StoreRegressionTests(unittest.TestCase):
         self.assertEqual(self.store.totals()[second], 1800)
 
 
+class InterruptionChoiceTests(unittest.TestCase):
+    def test_keep_dialog_defaults_to_current_book_and_can_choose_other(self):
+        from PySide6.QtWidgets import QApplication
+        qt_app = QApplication.instance() or QApplication([])
+        books = [
+            (1, "Writing book", r"C:\\Books\\Writing.docx"),
+            (2, "Editing book", r"C:\\Books\\Editing.pdf"),
+        ]
+        dialog = app.InterruptionDialog(books, 1, "Switched away from Word")
+        self.assertEqual(dialog.chosen_book(), 1)
+        dialog.radio_buttons[2].setChecked(True)
+        dialog.choose("keep")
+        self.assertEqual(dialog.action, "keep")
+        self.assertEqual(dialog.chosen_book(), 2)
+        dialog.close()
+
+    def test_keep_choice_sticks_until_explicit_window_transition(self):
+        # Book 1 was in front when user chose to keep tracking book 2.
+        choice = app.resolve_book_override(1, 2, 101, 101, False)
+        self.assertEqual(choice, (2, 2, False))
+        # Even after the matching front window is polled repeatedly.
+        self.assertEqual(app.resolve_book_override(1, *choice[1:2], 101, 101, False),
+                         (2, 2, False))
+        # Switch to untracked app: choice stays in force.
+        choice = app.resolve_book_override(None, 2, 101, 303, False)
+        self.assertEqual(choice, (None, 2, True))
+        # Returning to a registered book returns to automatic detection.
+        self.assertEqual(app.resolve_book_override(1, 2, 101, 101, True),
+                         (1, None, False))
+
+
 if __name__ == "__main__":
     unittest.main()

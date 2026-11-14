@@ -1,11 +1,11 @@
 # Book Work Clock
 
-A small, privacy-friendly Windows 11 desktop application that tracks time spent on individual books in Microsoft Word.
+A small, privacy-friendly Windows 11 desktop application that tracks time spent on books in Microsoft Word and supported PDF viewers.
 
 ## First version (MVP)
 
-- Add, edit, and archive books, each linked to a local Word document (.doc, .docx, or .docm).
-- Automatically start/resume tracking when the matching Word document is in front and the computer is active.
+- Add, edit, and archive books, each linked to a local Word or PDF document (.doc, .docx, .docm, .pdf).
+- Automatically start/resume tracking when the matching Word or PDF document is in front and the computer is active.
 - Automatically switch between registered books.
 - Prompt after **15 seconds** without mouse **or keyboard** activity.
 - Prompt when switching away from Word; choose **Keep tracking**, **Pause**, **Stop**, or **Pause + don't ask again**.
@@ -80,10 +80,10 @@ in **Windows Credential Manager** and revoke the token in GitHub.
 
 To make the **next update-installable release**, open GitHub **Actions → Build
 Windows installer → Run workflow** on the `main` branch. A successful manual
-run builds the installer and publishes the versioned release (currently `v0.3.1`).
+run builds the installer and publishes the versioned release (currently `v0.3.2`).
 
 For **subsequent updates**, increment both `APP_VERSION` in `updater.py` and
-`MyAppVersion` in `installer/BookWorkClock.iss` (for example to `0.3.2`),
+`MyAppVersion` in `installer/BookWorkClock.iss` (for example to `0.3.3`),
 commit the change, and run the same workflow manually. The release tag is
 created by the workflow. A release with the same version cannot be overwritten;
 use a new version for every update. Pushing a `v*` tag also publishes a release.
@@ -122,8 +122,8 @@ py -m venv .venv
 ## How to use
 
 1. Choose **Add book**, browse to its Word document, and give the book a name.
-2. Open that document in Microsoft Word (desktop app, **WINWORD.EXE**).
-3. Bring Word to the foreground and type or move the mouse; the app starts tracking automatically.
+2. Open a Word document in Microsoft Word (desktop app, **WINWORD.EXE**), or a registered PDF in Adobe Acrobat, Foxit, SumatraPDF, Microsoft Edge, Chrome, or Firefox.
+3. Bring the matching document to the foreground and type, scroll, or move the mouse; the app starts tracking automatically.
 4. If you're interrupted, respond to the prompt or use the Pause/Stop buttons.
 5. Select **Pause + don't ask again** (or uncheck automatic tracking) to suppress tracking until you manually press **Start / Resume**.
 6. The recent periods and book totals are available in the main window.
@@ -149,11 +149,27 @@ The output is in `dist\BookWorkClock.exe`.
 ## Current limitations / next improvements
 
 - Tested execution on Windows 11 is still needed; development was performed remotely without a Windows GUI.
-- Matching uses the Word window title and the registered document filename. Word title variations, similarly named documents, and some unusual Word installations may require improved matching through Word COM automation.
+- Matching uses the foreground window title, process name, and registered document filename (with or without Word extension). Different application title formats may require enhancements. For PDFs opened in a browser, the PDF filename including `.pdf` must appear at the beginning of the tab/window title; an unrelated website is not tracked.
 - Tracking is **activity/foreground detection**, not proof of writing or actual document edits. Reading and thinking can also be counted at your choice.
 - A paused or stopped session is recorded as one or more time segments. Manual entries are editable, but there is not yet a separate pause-event log or CSV/Excel export.
 - When the user chooses *Keep tracking* outside Word, time continues until the registered Word window returns or the timer is manually paused/stopped. Subsequent foreground switches while outside Word are not repeatedly prompted.
 - The desktop interface has been refreshed but does **not yet exactly reproduce the earlier design concept** (sidebar, large summary cards, charts). It needs further UI work and real-world testing for focus changes, sleep/wake, idle prompt timing, clock accuracy and window title variations.
+
+## Foreground detection and interruption changes (v0.3.2)
+
+- Recognizes supported desktop PDF readers and PDF files in Edge/Chrome/Firefox.
+- Improved Word title matching with or without file extension and with app suffixes.
+- Displays a **Detection** diagnostic under the status label. While using a document,
+  it shows the matched book; if a title isn't recognized, it shows the foreground
+  application's process name and document title, so the matching rule can be fixed.
+- Paused tracking resumes on renewed keyboard/mouse input while a registered document
+  is foreground, or when switching back to it; automatic tracking must be enabled.
+- Interruption choices are now presented using an **always-on-top dialog**, even when
+  Book Work Clock is minimized in the tray.
+- Choosing **Keep tracking** prevents repeated prompts until normal activity resumes.
+- The app still does **not inspect** PDF/Word content. Work time is inferred from the
+  foreground window and keyboard/mouse activity; tests on the target Windows 11 device
+  are recommended before trusting billed time.
 
 ## Planned improvements
 

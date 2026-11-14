@@ -1,6 +1,6 @@
 ; Book Work Clock per-user installer built from a PyInstaller executable.
 #define MyAppName "Book Work Clock"
-#define MyAppVersion "0.3.2"
+#define MyAppVersion "0.3.3"
 #define MyAppExeName "BookWorkClock.exe"
 
 [Setup]

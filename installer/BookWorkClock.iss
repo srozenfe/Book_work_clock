@@ -19,7 +19,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 CloseApplications=yes
 
 [Files]
-Source: "..\dist\BookWorkClock.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\BookWorkClock\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Book Work Clock"; Filename: "{app}\{#MyAppExeName}"

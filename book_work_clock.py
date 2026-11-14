@@ -612,6 +612,9 @@ class MainWindow(QMainWindow):
         self.pause_needs_leave = False
         self.idle_prompt_suppressed = False
         self.last_foreground_signature = None
+        self.book_override = None  # explicit book picked in Keep tracking popup
+        self.override_origin_hwnd = None
+        self.override_seen_other_window = False
         self.setWindowTitle(f"Book Work Clock v{APP_VERSION}")
         self.resize(1030, 800)
         self.setStyleSheet("""
@@ -1044,6 +1047,9 @@ class MainWindow(QMainWindow):
             return
         self.pause()
         self.current_book = book_id
+        self.book_override = None
+        self.override_origin_hwnd = None
+        self.override_seen_other_window = False
         self.resume_guard = None
         self.pause_needs_leave = False
         self.idle_prompt_suppressed = False
@@ -1068,6 +1074,7 @@ class MainWindow(QMainWindow):
         self.status.setText("Paused")
 
     def user_pause(self):
+        self.book_override = None
         self.pause()
         self.resume_guard = last_input_tick()
         # Don't instantly resume simply because clicking Pause returns focus to
@@ -1075,6 +1082,7 @@ class MainWindow(QMainWindow):
         self.pause_needs_leave = True
 
     def stop(self):
+        self.book_override = None
         self.pause()
         self.current_book = None
         self.resume_guard = last_input_tick()
@@ -1094,6 +1102,7 @@ class MainWindow(QMainWindow):
     def interrupt(self, reason):
         if self.segment_id is None:
             return
+        origin_hwnd = int(user32.GetForegroundWindow()) if user32 else None
         dialog = InterruptionDialog(
             self.store.books(), self.current_book, reason
         )
@@ -1116,6 +1125,9 @@ class MainWindow(QMainWindow):
                 return
             if selected != self.current_book:
                 self.begin(selected)
+            self.book_override = selected
+            self.override_origin_hwnd = origin_hwnd
+            self.override_seen_other_window = False
             self.continue_outside_word = True
             self.idle_prompt_suppressed = True
             self.status.setText(
@@ -1148,6 +1160,18 @@ class MainWindow(QMainWindow):
             self.pause_needs_leave = False
             return
         book_id = self.find_matching_book(process, title)
+        hwnd = int(user32.GetForegroundWindow()) if user32 else None
+        # A user-picked Keep target wins over the document that happened
+        # to be in front when the interruption appeared. The override ends
+        # only when the user switches windows and returns to a tracked file.
+        if self.book_override is not None:
+            if hwnd != self.override_origin_hwnd:
+                self.override_seen_other_window = True
+            if book_id is not None:
+                if self.override_seen_other_window:
+                    self.book_override = None
+                else:
+                    book_id = self.book_override
         idle = idle_seconds() >= IDLE_SECONDS
         if book_id is not None:
             book_label = next(

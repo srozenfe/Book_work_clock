@@ -683,6 +683,7 @@ class MainWindow(QMainWindow):
             seconds = time.monotonic() - self.segment_started
             self.store.save_segment(self.segment_id, seconds)
             self.clock.setText(format_duration(seconds))
+            self.update_earnings()
         else:
             self.clock.setText("00:00:00")
 

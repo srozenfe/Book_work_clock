@@ -79,10 +79,15 @@ background startup does not check or download.
 
 ### Publishing an update
 
-To make a new update installable, publish a version tag in the form `v0.3.1`
-(or higher) and keep the application and installer version numbers aligned.
-The Windows GitHub Actions workflow builds and publishes the installer as a
-GitHub Release when a `v*` tag is pushed.
+To make the **first update-installable release**, open GitHub **Actions → Build
+Windows installer → Run workflow** on the `main` branch. A successful manual
+run builds the installer and publishes the versioned release (currently `v0.3.0`).
+
+For **subsequent updates**, increment both `APP_VERSION` in `updater.py` and
+`MyAppVersion` in `installer/BookWorkClock.iss` (for example to `0.3.1`),
+commit the change, and run the same workflow manually. The release tag is
+created by the workflow. A release with the same version cannot be overwritten;
+use a new version for every update. Pushing a `v*` tag also publishes a release.
 
 **Current note:** This version's updater requires an actual published
 release to exist. Until the first tagged release is published, the update

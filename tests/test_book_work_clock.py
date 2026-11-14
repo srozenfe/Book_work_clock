@@ -85,6 +85,36 @@ class StoreRegressionTests(unittest.TestCase):
         self.assertEqual(len(self.store.history(second)), 1)
         self.assertEqual(len(self.store.history()), 2)
 
+    def test_archive_view_and_restore_preserve_total_and_payment(self):
+        book_id, _ = self.store.add_book(
+            "Second Book", [r"C:\\Books\\Second.docx"]
+        )
+        self.store.update_payment(book_id, 4600, "ILS")
+        self.store.add_manual(book_id, self.start, self.end, "Review")
+        self.store.archive_book(book_id)
+        self.assertEqual(
+            [b[0] for b in self.store.archived_books()], [book_id]
+        )
+        self.assertEqual(self.store.books(), [])
+        self.store.restore_book(book_id)
+        self.assertFalse(self.store.archived_books())
+        self.assertEqual(self.store.books()[0][0], book_id)
+        self.assertEqual(len(self.store.history(book_id)), 1)
+        self.assertEqual(self.store.book_payment(book_id), (4600.0, "ILS"))
+
+    def test_archive_restore_conflict_does_not_merge_books(self):
+        book_id, _ = self.store.add_book(
+            "First", [r"C:\\Books\\Shared.docx"]
+        )
+        self.store.archive_book(book_id)
+        other_id, _ = self.store.add_book(
+            "Second", [r"C:\\Books\\Other.docx"]
+        )
+        self.store.edit_book(other_id, "Second", [r"C:\\Books\\Shared.docx"])
+        with self.assertRaisesRegex(ValueError, "belongs to an active book"):
+            self.store.restore_book(book_id)
+        self.assertEqual([b[0] for b in self.store.archived_books()], [book_id])
+
     def test_session_edit_can_move_hours_between_books(self):
         first, _ = self.store.add_book("One", [r"C:\Books\One.docx"])
         second, _ = self.store.add_book("Two", [r"C:\Books\Two.docx"])

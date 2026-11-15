@@ -28,7 +28,7 @@ from PySide6.QtGui import QAction, QIcon
 
 APP_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "BookWorkClock"
 DB_FILE = APP_DIR / "work_clock.sqlite3"
-IDLE_SECONDS = 15
+IDLE_SECONDS = 60
 STARTUP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_NAME = "BookWorkClock"
 
@@ -1239,7 +1239,7 @@ class MainWindow(QMainWindow):
             return
         if idle and not self.last_idle_alert and not self.idle_prompt_suppressed:
             self.last_idle_alert = True
-            self.interrupt("No keyboard or mouse activity for 15 seconds.")
+            self.interrupt(f"No keyboard or mouse activity for {IDLE_SECONDS} seconds.")
         elif (
             book_id is None and not idle
             and not self.last_nonword_alert and not self.continue_outside_word

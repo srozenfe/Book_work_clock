@@ -24,6 +24,9 @@ class StoreRegressionTests(unittest.TestCase):
         self.start = datetime.fromisoformat("2026-11-14T10:00:00+02:00")
         self.end = self.start + timedelta(minutes=30)
 
+    def test_reading_idle_threshold_is_one_minute(self):
+        self.assertEqual(app.IDLE_SECONDS, 60)
+
     def test_archived_book_restores_same_id_and_history(self):
         book_id, restored = self.store.add_book(
             "Novel One", [r"C:\Books\Novel.docx", r"C:\Books\Novel.pdf"]

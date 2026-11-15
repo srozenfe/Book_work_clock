@@ -7,12 +7,19 @@ A small, privacy-friendly Windows 11 desktop application that tracks time spent 
 - Add, edit, and archive books, each linked to a local Word or PDF document (.doc, .docx, .docm, .pdf).
 - Automatically start/resume tracking when the matching Word or PDF document is in front and the computer is active.
 - Automatically switch between registered books.
-- Prompt after **15 seconds** without mouse **or keyboard** activity.
+- Prompt after **60 seconds (1 minute)** without mouse **or keyboard** activity.
 - Prompt when switching away from Word; choose **Keep tracking**, **Pause**, **Stop**, or **Pause + don't ask again**.
 - Optional automatic-tracking checkbox; manually restart with **Start / Resume**.
 - Track sessions in a local SQLite database, with dates, start/end times, and duration.
 - Keep historical time when a book is removed (archived), and show recent time entries.
 - Run in the Windows notification area when the main window is closed.
+
+## One-minute inactivity threshold (v0.3.7)
+
+To avoid interruption prompts while reading or reviewing documents, the idle
+threshold is now **60 seconds**, up from 15 seconds. Mouse and keyboard
+activity both reset the timer. Other behavior, including the prompt on
+switching away from a registered document, is unchanged.
 
 ## Active and archived books; explicit keep-tracking choice (v0.3.6)
 
